@@ -1,11 +1,27 @@
-
 import tensorflow as tf
 import numpy as np
+import matplotlib.pyplot as plt
 
-class Multi_TensorHIP():
+
+class TensorHIP():
+    """
+        Hawkes Intensity Process Model Implemented and Optimized in TensorFlow
+        Used for prediction of time series using the Hawkes Self-Excitation 
+        model with one or more exogenous sources of influence
+
+        Parameters
+        -----------
+        x
+            a list of the time-series for possible sources of influence in 
+            predicting the target series
+        y
+            target time series
+        num_train
+
+        num_test:
+    """
     def __init__(self, x, y, num_train, num_test):
         self.x = np.array(x)
-        self.input_count = len(x)
         self.y = y
         self.num_train = int(num_train * 0.8)
         self.num_validation = num_train - self.num_train
@@ -16,18 +32,60 @@ class Multi_TensorHIP():
         self.mu = 0
         self.theta = 0
         self.C = 0
-    
+                
     def time_decay_base(self, i):
+        """
+            Kernel Base for the time-decaying exponential kernel
+            Increasing per each time step in the series
+
+            Parameters
+            ----------
+            i
+                time series length
+        """
         return tf.cast(tf.range(i, 0, -1), tf.float32)
 
     def get_predictions(self, x_curr, y_hist, eta, mu, theta, C, gamma):
-        #if (tf.shape(y_hist)[0] == 1):
-        #    return gamma + tf.reduce_sum(tf.multiply(mu, x_curr))
-        return eta + tf.reduce_sum(tf.multiply(mu, x_curr)) \
-            + C * (tf.reduce_sum(y_hist * tf.pow(self.time_decay_base(tf.shape(y_hist)[0]), tf.tile([-1 - theta], [tf.shape(y_hist)[0]]))))
-        
-        
-    def fit(self, num_iterations, op='gd', verbose=True):
+        """
+            Predict the future values of X series given the previous values in
+            the series and a list of influential series.
+
+            Parameters
+            ----------
+            x_curr
+                 previous values of the series we're trying to predict.
+            y_hist
+                 a list of the previous values of the relative sources of influence.
+            eta, mu, theta, C, gamma
+                 model parameters.
+        """
+        return (
+                  eta + tf.reduce_sum(tf.multiply(mu, x_curr))
+                  + C * (tf.reduce_sum(y_hist * tf.pow(self.time_decay_base(tf.shape(y_hist)[0]),
+                  tf.tile([-1 - theta], [tf.shape(y_hist)[0]]))))
+               )       
+                
+    def fit(self, num_iterations, op='adagrad', verbose=True):
+        """
+            Fit the best HIP model using multiple random restarts by
+            minimizing the loss value of the model 
+            
+            Parameters
+            ----------
+            num_iterations
+                number of random restarts for fitting the model
+            op 
+                choice of the optimzier ('adagrad', 'adam')
+            verbose 
+                print logs
+
+            Returns
+            -------
+            predictions
+                predictions for the time-series
+            losses
+                loss values for the fitted model
+        """
         best_loss = np.inf
         best_eta = 0
         best_mu = 0
@@ -66,7 +124,6 @@ class Multi_TensorHIP():
         gamma = tf.get_variable('gamma', initializer=tf.constant(best_gamma))
 
         pred = self.get_predictions(X_CURR, Y_HIST, eta, mu, theta, C, gamma)
-
         loss = (tf.square(Y - pred) / 2) + (tf.reduce_sum(tf.square(mu)) / 2)
 
         if op == 'adam':
@@ -76,16 +133,26 @@ class Multi_TensorHIP():
         
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
-
             predictions = np.zeros(len(self.y))
             losses = np.zeros(self.num_test)
+
             for i in range(self.num_test):
-                losses[i] = sess.run(loss, feed_dict={X_CURR: self.x[:, self.num_train + self.num_validation + i], \
-                                                      Y_HIST: self.y[:self.num_train + self.num_validation + i], \
-                                                      Y: self.y[self.num_train + self.num_validation + i]})
+                losses[i] = sess.run(loss, 
+                                    feed_dict={
+                                        X_CURR: self.x[:, self.num_train + self.num_validation + i], \
+                                        Y_HIST: self.y[:self.num_train + self.num_validation + i], \
+                                        Y: self.y[self.num_train + self.num_validation + i]
+                                        }
+                                    )
                 
             for i in range(0, len(self.y)):
-                predictions[i] = sess.run(pred, feed_dict={X_CURR: self.x[:, i], Y_HIST: self.y[:i], Y: self.y[i]})
+                predictions[i] = sess.run(pred, 
+                                          feed_dict={
+                                                    X_CURR: self.x[:, i],
+                                                    Y_HIST: self.y[:i], 
+                                                    Y: self.y[i]
+                                                    }
+                                         )
                 
             e, m, t, c, g = sess.run([eta, mu, theta, C, gamma])
             
@@ -93,9 +160,16 @@ class Multi_TensorHIP():
             if predictions[i] < 0:
                 predictions[i] = 0
                 
+        self.predictions = predictions
+        self.losses = losses
+
         return predictions, losses
    
     def _fit(self, op='adagrad'):
+        """
+            Internal method for fitting the model at each iteration of the
+            training process
+        """
         tf.reset_default_graph()
         
         X_CURR = tf.placeholder(tf.float32, name='X_CURR')
@@ -137,9 +211,6 @@ class Multi_TensorHIP():
                 if iter_counter > 1500:
                     break
 
-                #if iter_counter % 100 == 0:
-                    #print("Iteration " + str(iter_counter) + ":" + str(abs(prev_loss - losses.sum())))
-
                 prev_loss = losses.sum()
                 iter_counter += 1
                 
@@ -147,8 +218,28 @@ class Multi_TensorHIP():
 
         return losses, e, m, t, c, gamma
     
+    def plot_predictions(self):
+        """
+            Plot the current predictions from the fitted model 
+        """
+        last_index = self.num_train + self.num_test
+        
+        plt.axvline(self.num_train, color='k')
+        plt.plot(np.arange(last_index), self.y[:last_index], 'k--', label='Observed #views')
+        if len(self.x) == 1:
+            import ipdb; ipdb.set_trace()
+            plt.plot(np.arange(last_index), self.x[0][:last_index], 'r--', label='Observed #shares')
+        plt.plot(np.arange(last_index), self.predictions[:last_index], 'b-', label='HIP Model Predictions')
+
+        plt.legend()        
+        plt.xlabel('Time')
+        plt.ylabel('Y')
+        plt.title("Prediction Vs. Truth")
+
+        plt.show()
+
     def get_parameters(self):
+        """
+            Geter method to get the model parameters
+        """
         return self.eta, self.mu, self.theta, self.C, self.gamma
-    
-    def get_mu(self):
-        return self.mu
