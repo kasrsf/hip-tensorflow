@@ -14,3 +14,9 @@ To verify successful installation, the following command should run from the com
 ```
 python -c "import hip"
 ```
+
+# Requirements
+
+* Python 3.5
+
+The code may work with other versions of Python but this is not tested.
