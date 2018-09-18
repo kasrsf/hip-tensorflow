@@ -227,7 +227,6 @@ class TensorHIP():
         plt.axvline(self.num_train, color='k')
         plt.plot(np.arange(last_index), self.y[:last_index], 'k--', label='Observed #views')
         if len(self.x) == 1:
-            import ipdb; ipdb.set_trace()
             plt.plot(np.arange(last_index), self.x[0][:last_index], 'r--', label='Observed #shares')
         plt.plot(np.arange(last_index), self.predictions[:last_index], 'b-', label='HIP Model Predictions')
 
