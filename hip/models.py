@@ -2,6 +2,11 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 
+# stop the optimization process after doing a certain number of iterations
+OPTIMIZAITION_MAX_ITERATIONS = 1500
+OPTIMIZATION_LOSS_TOLERANCE = 0.001
+
+RANDOM_SEED = 42
 
 class TensorHIP():
     """
@@ -20,13 +25,23 @@ class TensorHIP():
 
         num_test:
     """
-    def __init__(self, x, y, num_train, num_test):
+    def __init__(self, x, y, train_split_size=0.8):
         self.x = np.array(x)
-        self.y = y
-        self.num_train = int(num_train * 0.8)
-        self.num_validation = num_train - self.num_train
-        self.num_test = num_test
-        
+        self.y = np.array(y)
+
+        # do the train-validation-test split 
+        # (use same split: Train = 0.8 * 0.8 * length, 
+        # validation = 0.2 * 0.8 * length, test = 0.2 * length)
+        test_split = int(len(y) * train_split_size)
+        validation_split = int(test_split * train_split_size)
+        self.train_x, self.train_y = self.x[:, :validation_split], self.y[:validation_split]
+        self.validation_x, self.validation_y = (
+                                                  self.x[:, validation_split:test_split], 
+                                                  self.y[validation_split:test_split]
+                                               )  
+        self.test_x, self.test_y = self.x[:, test_split:], self.y[test_split:]
+
+        # model parameters
         self.gamma = 0
         self.eta = 0
         self.mu = 0
@@ -45,7 +60,7 @@ class TensorHIP():
         """
         return tf.cast(tf.range(i, 0, -1), tf.float32)
 
-    def get_predictions(self, x_curr, y_hist, eta, mu, theta, C, gamma):
+    def predict(self, x_curr, y_hist, model_params=None):
         """
             Predict the future values of X series given the previous values in
             the series and a list of influential series.
@@ -56,16 +71,19 @@ class TensorHIP():
                  previous values of the series we're trying to predict.
             y_hist
                  a list of the previous values of the relative sources of influence.
-            eta, mu, theta, C, gamma
+            mode_params
                  model parameters.
         """
+        if model_params is None:
+            model_params = self.model_params
+
         return (
-                  eta + tf.reduce_sum(tf.multiply(mu, x_curr))
-                  + C * (tf.reduce_sum(y_hist * tf.pow(self.time_decay_base(tf.shape(y_hist)[0]),
-                  tf.tile([-1 - theta], [tf.shape(y_hist)[0]]))))
+                  model_params['eta'] + tf.reduce_sum(tf.multiply(model_params['mu'], x_curr))
+                  + model_params['C'] * (tf.reduce_sum(y_hist * tf.pow(self.time_decay_base(tf.shape(y_hist)[0]),
+                  tf.tile([-1 - model_params['theta']], [tf.shape(y_hist)[0]]))))
                )       
                 
-    def fit(self, num_iterations, op='adagrad', verbose=True):
+    def train(self, num_iterations, op='adagrad', verbose=True):
         """
             Fit the best HIP model using multiple random restarts by
             minimizing the loss value of the model 
@@ -81,154 +99,210 @@ class TensorHIP():
 
             Returns
             -------
-            predictions
-                predictions for the time-series
-            losses
-                loss values for the fitted model
+            best_loss
+                best loss value achieved among the iterations
         """
+        self.model_params = dict()
+
         best_loss = np.inf
-        best_eta = 0
-        best_mu = 0
-        best_theta = 0
-        best_C = 0
-        
         for i in range(num_iterations):
             if verbose == True:
                 print("== Initialization " + str(i + 1))
-            losses, e, m, t, c, g = self._fit(op)
+            loss_value, model_params = self._fit(iteration_number=i, optimization_algorithm=op)
 
-            if (losses.sum() < best_loss):
-                best_loss = losses.sum()
-                best_eta = e
-                best_mu = m
-                best_theta = t
-                best_C = c
-                best_gamma = g
+            if loss_value < best_loss:
+                best_loss = loss_value
+                self.model_params = model_params
 
-        self.eta = best_eta
-        self.mu = best_mu
-        self.theta = best_theta
-        self.C = best_C
-        self.gamma = best_gamma
-        
+        return best_loss
+
+    def _init_tf_model_variables(self):
+        eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                        
+        mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
+        theta = tf.get_variable('theta', initializer=tf.constant(self.model_params['theta']))  
+        C = tf.get_variable('C', initializer=tf.constant(self.model_params['C']))
+        gamma = tf.get_variable('gamma', initializer=tf.constant(self.model_params['gamma']))
+
+    def get_predictions(self):
+        # predict future values for the test data
+
+        # Instantiate a new model with the trained parameters
         tf.reset_default_graph()
         
-        X_CURR = tf.placeholder(tf.float32, name='X_CURR')
-        Y_HIST = tf.placeholder(tf.float32, name='Y_HIST')
-        Y = tf.placeholder(tf.float32, name='Y')
-
-        eta = tf.get_variable('eta', initializer=tf.constant(best_eta))                        
-        mu = tf.get_variable('mu', initializer=tf.constant(best_mu))        
-        theta = tf.get_variable('theta', initializer=tf.constant(best_theta))  
-        C = tf.get_variable('C', initializer=tf.constant(best_C))
-        gamma = tf.get_variable('gamma', initializer=tf.constant(best_gamma))
-
-        pred = self.get_predictions(X_CURR, Y_HIST, eta, mu, theta, C, gamma)
-        loss = (tf.square(Y - pred) / 2) + (tf.reduce_sum(tf.square(mu)) / 2)
-
-        if op == 'adam':
-            optimizer = tf.train.AdamOptimizer(learning_rate=0.1).minimize(loss)
-        elif op == 'adagrad':
-            optimizer = tf.train.AdagradOptimizer(learning_rate=0.5).minimize(loss)
+        x_observed = tf.placeholder(tf.float32, name='x_observed')
+        y_history = tf.placeholder(tf.float32, name='y_history')
+        y_current = tf.placeholder(tf.float32, name='y')
+        self._init_tf_model_variables()
         
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            predictions = np.zeros(len(self.y))
-            losses = np.zeros(self.num_test)
+        pred = self.predict(x_observed, y_history)
+        loss = (tf.square(y_current - pred) / 2)
 
-            for i in range(self.num_test):
-                losses[i] = sess.run(loss, 
-                                    feed_dict={
-                                        X_CURR: self.x[:, self.num_train + self.num_validation + i], \
-                                        Y_HIST: self.y[:self.num_train + self.num_validation + i], \
-                                        Y: self.y[self.num_train + self.num_validation + i]
-                                        }
-                                    )
-                
-            for i in range(0, len(self.y)):
-                predictions[i] = sess.run(pred, 
+        with tf.Session() as sess:
+            tf.set_random_seed(RANDOM_SEED)
+            sess.run(tf.global_variables_initializer())
+            predictions = np.zeros_like(self.y)
+            losses = np.zeros_like(self.test_y)
+
+            # get loss values on the test data
+            for index, y in enumerate(self.test_y):
+                losses[index] = sess.run(
+                                            loss, 
+                                            feed_dict={
+                                                x_observed: self.test_x[:, index], 
+                                                y_history: self.test_y[:index], 
+                                                y_current: y
+                                            }
+                                        )
+
+            # get model prediction for all of the data
+            for index, y in enumerate(self.y):
+                predictions[index] = sess.run(pred, 
                                           feed_dict={
-                                                    X_CURR: self.x[:, i],
-                                                    Y_HIST: self.y[:i], 
-                                                    Y: self.y[i]
+                                                    x_observed: self.x[:, index],
+                                                    y_history: self.y[:index], 
+                                                    y_current: self.y[index]
                                                     }
                                          )
-                
-            e, m, t, c, g = sess.run([eta, mu, theta, C, gamma])
             
-        for i in range(len(predictions)):
-            if predictions[i] < 0:
-                predictions[i] = 0
+        # TODO: What to do when predictions are zero (enforce max(0, pred)?)
+        # for i in range(len(predictions)):
+        #     if predictions[i] < 0:
+        #         predictions[i] = 0
                 
-        self.predictions = predictions
-        self.losses = losses
-
         return predictions, losses
    
-    def _fit(self, op='adagrad'):
+    def _fit(self, iteration_number, optimization_algorithm='adagrad'):
         """
             Internal method for fitting the model at each iteration of the
             training process
         """
         tf.reset_default_graph()
-        
-        X_CURR = tf.placeholder(tf.float32, name='X_CURR')
-        Y_HIST = tf.placeholder(tf.float32, name='Y_HIST')
-        Y = tf.placeholder(tf.float32, name='Y')
+        x_observed = tf.placeholder(tf.float32, name='x_observed')
+        y_history = tf.placeholder(tf.float32, name='y_history')
+        y_current = tf.placeholder(tf.float32, name='y')
 
-        eta = tf.get_variable('eta', shape=(), initializer=tf.random_uniform_initializer(0, 30))                        
-        mu = tf.get_variable('mu', shape=(1, len(self.x)), initializer=tf.random_uniform_initializer(-3, 3))        
-        theta = tf.get_variable('theta', shape=(), initializer=tf.random_uniform_initializer(0, 30))  
-        C = tf.get_variable('C', shape=(), initializer=tf.random_uniform_initializer(0, 30))
-        gamma = tf.get_variable('gamma', shape=(), initializer=tf.random_uniform_initializer(0, 30))
-        
-        pred = self.get_predictions(X_CURR, Y_HIST, eta, mu, theta, C, gamma)
+        # The model: 
+        # eta + sum(mu[i], x_observed[i]) + C * (kernel_base ^ -(1 + theta))
+        eta = tf.get_variable(
+                              name='eta',
+                              shape=(),
+                              initializer=tf.random_uniform_initializer(0, 30, seed=RANDOM_SEED + iteration_number)
+                            )
 
-        loss = (tf.square(Y - pred) / 2) + (tf.reduce_sum(tf.square(mu)) / 2)
-        prev_loss = None
-        iter_counter = 1
-        if op == 'adam':
+        mu = tf.get_variable(
+                             name='mu',
+                             shape=(1, len(self.x)),
+                             initializer=tf.random_uniform_initializer(-3, 3, seed=RANDOM_SEED + iteration_number)
+                            )        
+
+        theta = tf.get_variable(
+                                name='theta',
+                                shape=(),
+                                initializer=tf.random_uniform_initializer(0, 30, seed=RANDOM_SEED + iteration_number)
+                               )  
+
+        C = tf.get_variable(
+                            name='C',
+                            shape=(),
+                            initializer=tf.random_uniform_initializer(0, 30, seed=RANDOM_SEED + iteration_number)
+                           )
+
+        gamma = tf.get_variable(
+                                name='gamma',
+                                shape=(),
+                                initializer=tf.random_uniform_initializer(0, 30, seed=RANDOM_SEED + iteration_number)
+                               )
+        
+        # create params dictionary for easier management
+        params_keys = ['eta', 'mu', 'theta', 'C', 'gamma']
+        params_values = [eta, mu, theta, C, gamma]
+        params = dict(zip(params_keys, params_values))
+
+        pred = self.predict(x_observed, y_history, params)
+        # TODO: Check effect of adding regularization
+        loss = (tf.square(y_current - pred) / 2)
+        previous_loss = np.inf
+        iteration_counter = 1
+
+        if optimization_algorithm == 'adam':
             optimizer = tf.train.AdamOptimizer(learning_rate=0.1).minimize(loss)
-        elif op == 'adagrad':
+        elif optimization_algorithm == 'adagrad':
             optimizer = tf.train.AdagradOptimizer(learning_rate=0.5).minimize(loss)
         
         with tf.Session() as sess:
+            tf.set_random_seed(RANDOM_SEED)
             sess.run(tf.global_variables_initializer())
 
-            while True:  
-                for i in range(0, self.num_train):
-                    sess.run(optimizer, feed_dict={X_CURR: self.x[:, i], Y_HIST: self.y[:i], Y: self.y[i]})
+            while iteration_counter < OPTIMIZAITION_MAX_ITERATIONS:  
+                for index, y in enumerate(self.train_y):
+                    sess.run(optimizer, 
+                            feed_dict={
+                                        x_observed: self.train_x[:, index],
+                                        y_history: self.y[:index], 
+                                        y_current: self.y[index]
+                                    }
+                            )
 
-                losses = np.zeros(self.num_validation)
-                for i in range(self.num_validation): 
-                    losses[i] = sess.run(loss, feed_dict={X_CURR: self.x[:, self.num_train + i], \
-                                                          Y_HIST: self.y[:self.num_train + i], \
-                                                          Y: self.y[self.num_train + i]})
-                    
-                if prev_loss != None and (abs(prev_loss - losses.sum()) < 100000):
-                    break
-                    
-                if iter_counter > 1500:
-                    break
+                losses = np.zeros_like(self.validation_y)
+                for index, y in enumerate(self.validation_y): 
+                    losses[index] = sess.run(
+                                            loss,
+                                            feed_dict={
+                                                        x_observed: self.validation_x[:, index],
+                                                        y_history: self.validation_y[:index],
+                                                        y_current: y
+                                                    }
+                                            )
 
-                prev_loss = losses.sum()
-                iter_counter += 1
+                # Check if optimization iteration produces improvements to the loss value
+                # higher than a relative tolerance: tol = |prev_loss - curr_loss| / min(prev_loss, curr_loss)
+                curr_loss = losses.sum()
+                # TODO: Handle possible division by zero
+                relative_loss = abs(previous_loss - curr_loss) / min(previous_loss, curr_loss)
+
+                if relative_loss < OPTIMIZATION_LOSS_TOLERANCE: break
                 
-            e, m, t, c, gamma = sess.run([eta, mu, theta, C, gamma])
+                previous_loss = losses.sum()
+                iteration_counter += 1
 
-        return losses, e, m, t, c, gamma
+            params_vals = sess.run([eta, mu, theta, C, gamma])
+            fitted_model_params = dict(zip(params_keys, params_vals)) 
+        
+        return curr_loss, fitted_model_params
     
     def plot_predictions(self):
         """
             Plot the current predictions from the fitted model 
         """
-        last_index = self.num_train + self.num_test
+        predictions, _ = self.get_predictions()
         
-        plt.axvline(self.num_train, color='k')
-        plt.plot(np.arange(last_index), self.y[:last_index], 'k--', label='Observed #views')
-        if len(self.x) == 1:
-            plt.plot(np.arange(last_index), self.x[0][:last_index], 'r--', label='Observed #shares')
-        plt.plot(np.arange(last_index), self.predictions[:last_index], 'b-', label='HIP Model Predictions')
+        data_length = len(self.y)
+        data_test_split_point = len(self.train_y) + len(self.validation_y)
+        plt.axvline(data_test_split_point, color='k')
+
+        plt.plot(np.arange(data_length), self.y, 'k--', label='Observed #views')
+
+        colors = iter(plt.cm.rainbow(np.linspace(0, 1, self.x.shape[0])))
+        for index, exo_source in enumerate(self.x):
+            c = next(colors)
+            plt.plot(np.arange(data_length), exo_source, c=c, alpha=0.3, label='exo #{0}'.format(index))
+
+        # plot predictions on training data with a different alpha to make the plot more clear            
+        plt.plot(
+                    np.arange(data_test_split_point),
+                    predictions[:data_test_split_point], 
+                    'b-',
+                    alpha=0.3,
+                    label='Model Fit'
+                )
+        plt.plot(
+                    np.arange(data_test_split_point, data_length),
+                    predictions[data_test_split_point:], 
+                    'b-',
+                    alpha=1,
+                    label='Model Predictions'
+                )
+
 
         plt.legend()        
         plt.xlabel('Time')
@@ -237,8 +311,8 @@ class TensorHIP():
 
         plt.show()
 
-    def get_parameters(self):
+    def get_model_parameters(self):
         """
-            Geter method to get the model parameters
+            Getter method to get the model parameters
         """
-        return self.eta, self.mu, self.theta, self.C, self.gamma
+        return self.model_params
