@@ -25,14 +25,24 @@ class TensorHIP():
 
         num_test:
     """
-    def __init__(self, x, y, train_split_size=0.8):
+    def __init__(self, 
+                 x,
+                 y=None,
+                 train_split_size=0.8,
+                 eta=0,
+                 mu=0,
+                 theta=0,
+                 C=0):
         self.x = np.array(x)
-        self.y = np.array(y)
+        if y is None:
+            self.y = np.zeros(self.x.shape[1])
+        else:
+            self.y = np.array(y)
 
         # do the train-validation-test split 
         # (use same split: Train = 0.8 * 0.8 * length, 
         # validation = 0.2 * 0.8 * length, test = 0.2 * length)
-        test_split = int(len(y) * train_split_size)
+        test_split = int(len(self.y) * train_split_size)
         validation_split = int(test_split * train_split_size)
         self.train_x, self.train_y = self.x[:, :validation_split], self.y[:validation_split]
         self.validation_x, self.validation_y = (
@@ -43,10 +53,11 @@ class TensorHIP():
 
         # model parameters
         #self.gamma = 0
-        self.eta = 0
-        self.mu = 0
-        self.theta = 0
-        self.C = 0
+        self.model_params = dict()
+        self.model_params['eta'] = eta
+        self.model_params['mu'] = mu
+        self.model_params['theta'] = theta
+        self.model_params['C'] = C
                 
     def time_decay_base(self, i):
         """
@@ -135,7 +146,6 @@ class TensorHIP():
         
         x_observed = tf.placeholder(tf.float32, name='x_observed')
         pred_history = tf.placeholder(tf.float32, name='pred_history')
-        y_truth = tf.placeholder(tf.float32, name='y_truth')
 
         self._init_tf_model_variables()
         
