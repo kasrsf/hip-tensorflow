@@ -3,8 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # stop the optimization process after doing a certain number of iterations
-OPTIMIZAITION_MAX_ITERATIONS = 1500
+OPTIMIZAITION_MAX_ITERATIONS = 100
 OPTIMIZATION_LOSS_TOLERANCE = 0.005
+PRINT_ITERATION_CHECKPOINT_STEPS = 15
 
 RANDOM_SEED = 42
 
@@ -29,11 +30,9 @@ class TensorHIP():
                  x,
                  y=None,
                  train_split_size=0.8,
-                 eta=0,
-                 mu=0,
-                 theta=0,
-                 C=0):
-        self.x = np.array(x)
+                 params=None
+                ):
+        self.x = np.asarray(x)
         if y is None:
             self.y = np.zeros(self.x.shape[1])
         else:
@@ -54,11 +53,14 @@ class TensorHIP():
         # model parameters
         #self.gamma = 0
         self.model_params = dict()
-        self.model_params['eta'] = eta
-        self.model_params['mu'] = mu
-        self.model_params['theta'] = theta
-        self.model_params['C'] = C
-                
+
+        if params is not None:
+            self.model_params['eta'] = params['eta']
+            self.model_params['mu'] = params['mu']
+            self.model_params['theta'] = params['theta']
+            self.model_params['C'] = params['C']
+            self.model_params['c'] = params['c']
+                    
     def time_decay_base(self, i):
         """
             Kernel Base for the time-decaying exponential kernel
@@ -92,7 +94,7 @@ class TensorHIP():
         exogenous = tf.reduce_sum(tf.multiply(model_params['mu'], x_curr))
         endogenous = model_params['C'] * tf.reduce_sum(
                                                         y_hist *
-                                                        tf.pow(self.time_decay_base(tf.shape(y_hist)[0]), 
+                                                        tf.pow(self.time_decay_base(tf.shape(y_hist)[0]) + model_params['c'], 
                                                                tf.tile([-1 - model_params['theta']], [tf.shape(y_hist)[0]]))
                                                     )
         # TODO: Vectorize Prediction
@@ -129,14 +131,12 @@ class TensorHIP():
                 best_loss = loss_value
                 self.model_params = model_params
 
-        return best_loss
-
     def _init_tf_model_variables(self):
         eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                        
         mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
         theta = tf.get_variable('theta', initializer=tf.constant(self.model_params['theta']))  
         C = tf.get_variable('C', initializer=tf.constant(self.model_params['C']))
-        #gamma = tf.get_variable('gamma', initializer=tf.constant(self.model_params['gamma']))
+        c = tf.get_variable('c', initializer=tf.constant(self.model_params['c']))
 
     def get_predictions(self):
         # predict future values for the test data
@@ -183,7 +183,7 @@ class TensorHIP():
         y_truth = tf.placeholder(tf.float32, name='y_truth')
 
         # The model: 
-        # eta + sum(mu[i], x_observed[i]) + C * (kernel_base ^ -(1 + theta))
+        # eta + sum(mu[i], x_observed[i]) + C * (kernel_base + c ^ -(1 + theta))
         eta = tf.get_variable(
                               name='eta',
                               shape=(),
@@ -199,24 +199,24 @@ class TensorHIP():
         theta = tf.get_variable(
                                 name='theta',
                                 shape=(),
-                                initializer=tf.random_uniform_initializer(-1, 1, seed=RANDOM_SEED + iteration_number)
+                                initializer=tf.random_uniform_initializer(0, 10, seed=RANDOM_SEED + iteration_number)
                                )  
 
         C = tf.get_variable(
                             name='C',
                             shape=(),
-                            initializer=tf.random_uniform_initializer(-1, 1, seed=RANDOM_SEED + iteration_number)
+                            initializer=tf.random_uniform_initializer(0, 1, seed=RANDOM_SEED + iteration_number)
                            )
 
-        # gamma = tf.get_variable(
-        #                         name='gamma',
-        #                         shape=(),
-        #                         initializer=tf.random_uniform_initializer(0, 30, seed=RANDOM_SEED + iteration_number)
-        #                        )
-        
+        c = tf.get_variable(
+                            name='c',
+                            shape=(),
+                            initializer=tf.random_uniform_initializer(0, 5, seed=RANDOM_SEED + iteration_number)
+                           )
+
         # create params dictionary for easier management
-        params_keys = ['eta', 'mu', 'theta', 'C']
-        params_values = [eta, mu, theta, C]
+        params_keys = ['eta', 'mu', 'theta', 'C', 'c']
+        params_values = [eta, mu, theta, C, c]
         params = dict(zip(params_keys, params_values))
 
         pred = self.predict(x_observed, pred_history, params)
@@ -244,6 +244,8 @@ class TensorHIP():
                 # TODO: Vectorize Implementation
                 for index, y in enumerate(self.train_y):
                     for i in range(index):
+                        # In some cases get cannot convert float NaN error (e.g predict gazatags by israel iteration #5) 
+                        # TODO: Investigate the possible issue
                         predictions[i] = sess.run(
                                                     pred,
                                                     feed_dict={
@@ -251,7 +253,7 @@ class TensorHIP():
                                                         pred_history: predictions[:i]
                                                     }
                                                 )
-
+        
                     sess.run(
                             optimizer, 
                             feed_dict={
@@ -275,19 +277,21 @@ class TensorHIP():
                 # higher than a relative tolerance: tol = |prev_loss - curr_loss| / min(prev_loss, curr_loss)
                 curr_loss = losses.sum()
                 # TODO: Handle possible division by zero
-                relative_loss = abs(previous_loss - curr_loss) / min(previous_loss, curr_loss)
-                print(relative_loss, iteration_counter)
+                relative_loss = abs(previous_loss - curr_loss) / min(previous_loss, curr_loss)    
                 if relative_loss < OPTIMIZATION_LOSS_TOLERANCE: break
-                
+
+                if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
+                    print("Iteration {0} ... Relative Loss = {1}".format(iteration_counter, relative_loss))
+            
                 previous_loss = losses.sum()
                 iteration_counter += 1
 
-            params_vals = sess.run([eta, mu, theta, C])
+            params_vals = sess.run([eta, mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
         
         return curr_loss, fitted_model_params
     
-    def plot_predictions(self):
+    def plot_predictions(self, legend=True):
         """
             Plot the current predictions from the fitted model 
         """
@@ -296,7 +300,6 @@ class TensorHIP():
         data_length = len(self.y)
         data_test_split_point = len(self.train_y) + len(self.validation_y)
         plt.axvline(data_test_split_point, color='k')
-
         plt.plot(np.arange(data_length), self.y, 'k--', label='Observed #views')
 
         colors = iter(plt.cm.rainbow(np.linspace(0, 1, self.x.shape[0])))
@@ -306,8 +309,8 @@ class TensorHIP():
 
         # plot predictions on training data with a different alpha to make the plot more clear            
         plt.plot(
-                    np.arange(data_test_split_point),
-                    predictions[:data_test_split_point], 
+                    np.arange(data_test_split_point+1),
+                    predictions[:data_test_split_point+1], 
                     'b-',
                     alpha=0.3,
                     label='Model Fit'
@@ -320,8 +323,8 @@ class TensorHIP():
                     label='Model Predictions'
                 )
 
-
-        plt.legend()        
+        if legend:
+            plt.legend()        
         plt.xlabel('Time')
         plt.ylabel('Y')
         plt.title("Prediction Vs. Truth")
