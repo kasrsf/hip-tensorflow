@@ -49,7 +49,6 @@ class TensorHIP():
                                                   self.y[validation_split:test_split]
                                                )  
         self.test_x, self.test_y = self.x[:, test_split:], self.y[test_split:]
-
         # model parameters
         #self.gamma = 0
         self.model_params = dict()
@@ -130,6 +129,8 @@ class TensorHIP():
             if loss_value < best_loss:
                 best_loss = loss_value
                 self.model_params = model_params
+        
+        
 
     def _init_tf_model_variables(self):
         eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                        
@@ -162,7 +163,7 @@ class TensorHIP():
                                                 feed_dict={
                                                     x_observed: self.x[:, index],
                                                     pred_history: predictions[:index]
-                                                    }
+                                                }
                                          )
             
         # TODO: What to do when predictions are zero (enforce max(0, pred)?)
@@ -199,19 +200,24 @@ class TensorHIP():
         theta = tf.get_variable(
                                 name='theta',
                                 shape=(),
-                                initializer=tf.random_uniform_initializer(0, 10, seed=RANDOM_SEED + iteration_number)
+                                initializer=tf.random_uniform_initializer(0, 10, seed=RANDOM_SEED + iteration_number),
+                                constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                                )  
 
         C = tf.get_variable(
                             name='C',
                             shape=(),
-                            initializer=tf.random_uniform_initializer(0, 1, seed=RANDOM_SEED + iteration_number)
+                            initializer=tf.random_uniform_initializer(0, 1, seed=RANDOM_SEED + iteration_number),
+                            constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                            )
 
+        # c should be non-negative to prevent NaN values in the exponential part
+        # e.g.: (-1)^0.5 would return NaN
         c = tf.get_variable(
                             name='c',
                             shape=(),
-                            initializer=tf.random_uniform_initializer(0, 5, seed=RANDOM_SEED + iteration_number)
+                            initializer=tf.random_uniform_initializer(0, 5, seed=RANDOM_SEED + iteration_number),
+                            constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                            )
 
         # create params dictionary for easier management
@@ -220,7 +226,7 @@ class TensorHIP():
         params = dict(zip(params_keys, params_values))
 
         pred = self.predict(x_observed, pred_history, params)
-        predictions = np.zeros_like(self.y)
+        predictions = np.zeros_like(self.y, dtype=np.float64)
         # TODO: Check effect of adding regularization
         loss = tf.square(y_truth - pred)
         previous_loss = np.inf
@@ -241,18 +247,20 @@ class TensorHIP():
                 # TODO: Do training in one pass. first just create predictions history. in the second run feed the predictions for optimization.
                 # Need prediction to work without iteration. To make iterative prediction, create array and conver to tensor. 
                 # doesn't seem very efficient. but work for now to see the performance. consult wuga if the model works to improve performance
-                # TODO: Vectorize Implementation
+                # TODO: Vectorize Implementation (Priority with prediction)
                 for index, y in enumerate(self.train_y):
                     for i in range(index):
-                        # In some cases get cannot convert float NaN error (e.g predict gazatags by israel iteration #5) 
-                        # TODO: Investigate the possible issue
-                        predictions[i] = sess.run(
-                                                    pred,
-                                                    feed_dict={
-                                                        x_observed: self.train_x[:, i],
-                                                        pred_history: predictions[:i]
-                                                    }
-                                                )
+                        try:
+                            predictions[i] = sess.run(
+                                                        pred,
+                                                        feed_dict={
+                                                            x_observed: self.train_x[:, i],
+                                                            pred_history: predictions[:i]
+                                                        }
+                                                    )
+                        except:
+                            eta, mu, theta, C, c = sess.run([eta, mu, theta, C, c])
+                            import ipdb; ipdb.set_trace()
         
                     sess.run(
                             optimizer, 
@@ -263,22 +271,27 @@ class TensorHIP():
                                 }
                             )                            
                 
-                losses = np.zeros_like(self.validation_y)
+                losses = np.zeros_like(self.validation_y, dtype=np.float64)
                 for index, y in enumerate(self.validation_y): 
-                    losses[index], predictions[index] = sess.run(
-                                            [loss, pred],
-                                            feed_dict={
-                                                        x_observed: self.validation_x[:, index],
-                                                        pred_history: predictions[:index],
-                                                        y_truth: y
-                                                    }
-                                            )
+                    try:
+                        losses[index], predictions[index] = sess.run(
+                                                [loss, pred],
+                                                feed_dict={
+                                                            x_observed: self.validation_x[:, index],
+                                                            pred_history: predictions[:index],
+                                                            y_truth: y
+                                                        }
+                                                )
+                    except:
+                            eta, mu, theta, C, c = sess.run([eta, mu, theta, C, c])
+                            import ipdb; ipdb.set_trace()
                 # Check if optimization iteration produces improvements to the loss value
                 # higher than a relative tolerance: tol = |prev_loss - curr_loss| / min(prev_loss, curr_loss)
                 curr_loss = losses.sum()
                 # TODO: Handle possible division by zero
                 relative_loss = abs(previous_loss - curr_loss) / min(previous_loss, curr_loss)    
                 if relative_loss < OPTIMIZATION_LOSS_TOLERANCE: break
+                if np.isnan(relative_loss): break
 
                 if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
                     print("Iteration {0} ... Relative Loss = {1}".format(iteration_counter, relative_loss))
@@ -299,20 +312,22 @@ class TensorHIP():
         
         data_length = len(self.y)
         data_test_split_point = len(self.train_y) + len(self.validation_y)
+
+        plt.figure(figsize=(8, 8))
         plt.axvline(data_test_split_point, color='k')
         plt.plot(np.arange(data_length), self.y, 'k--', label='Observed #views')
 
         colors = iter(plt.cm.rainbow(np.linspace(0, 1, self.x.shape[0])))
         for index, exo_source in enumerate(self.x):
             c = next(colors)
-            plt.plot(np.arange(data_length), exo_source, c=c, alpha=0.3, label='exo #{0}'.format(index))
+            plt.plot(np.arange(data_length), exo_source, c=c, alpha=0.3)
 
         # plot predictions on training data with a different alpha to make the plot more clear            
         plt.plot(
                     np.arange(data_test_split_point+1),
                     predictions[:data_test_split_point+1], 
                     'b-',
-                    alpha=0.3,
+                    alpha=0.5,
                     label='Model Fit'
                 )
         plt.plot(
@@ -336,3 +351,11 @@ class TensorHIP():
             Getter method to get the model parameters
         """
         return self.model_params
+
+    def get_test_prediction_error(self):
+        predictions = self.get_predictions()
+
+        test_split_start = len(self.train_y) + len(self.validation_y)
+        test_preds = predictions[test_split_start:]
+
+        return np.sqrt(np.sum((self.test_y - test_preds) ** 2))
