@@ -8,7 +8,6 @@ OPTIMIZATION_LOSS_TOLERANCE = 0.005
 PRINT_ITERATION_CHECKPOINT_STEPS = 15
 
 RANDOM_SEED = 42
-
 class TensorHIP():
     """
         Hawkes Intensity Process Model Implemented and Optimized in TensorFlow
@@ -99,7 +98,7 @@ class TensorHIP():
         # TODO: Vectorize Prediction
         return bias + exogenous + endogenous
                 
-    def train(self, num_iterations, op='adagrad', verbose=True):
+    def train(self, num_iterations, op='adagrad', verbose=True, regularizer=None):
         """
             Fit the best HIP model using multiple random restarts by
             minimizing the loss value of the model 
@@ -124,14 +123,14 @@ class TensorHIP():
         for i in range(num_iterations):
             if verbose == True:
                 print("== Initialization " + str(i + 1))
-            loss_value, model_params = self._fit(iteration_number=i, optimization_algorithm=op)
+            loss_value, model_params = self._fit(iteration_number=i,
+                                                 optimization_algorithm=op,
+                                                 regularizer=regularizer)
 
             if loss_value < best_loss:
                 best_loss = loss_value
                 self.model_params = model_params
         
-        
-
     def _init_tf_model_variables(self):
         eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                        
         mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
@@ -173,7 +172,7 @@ class TensorHIP():
                 
         return predictions
    
-    def _fit(self, iteration_number, optimization_algorithm='adagrad'):
+    def _fit(self, iteration_number, optimization_algorithm='adagrad', regularizer=None):
         """
             Internal method for fitting the model at each iteration of the
             training process
@@ -228,7 +227,11 @@ class TensorHIP():
         pred = self.predict(x_observed, pred_history, params)
         predictions = np.zeros_like(self.y, dtype=np.float64)
         # TODO: Check effect of adding regularization
-        loss = tf.square(y_truth - pred)
+        if regularizer is None:
+            loss = tf.square(y_truth - pred)
+        elif regularizer == 'l2':
+            loss = tf.square(y_truth - pred) + tf.reduce_sum(tf.square(mu)) + tf.square(C)
+
         previous_loss = np.inf
         iteration_counter = 1
 
