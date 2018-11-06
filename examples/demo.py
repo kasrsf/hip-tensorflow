@@ -8,7 +8,7 @@ if __name__ == '__main__':
     # from the active dataset @ https://github.com/andrei-rizoiu/hip-popularity
     daily_share, daily_view, _ = pickle.load(open('../data/views.p', 'rb'))
     model = TensorHIP([daily_share], daily_view)
-    model.train(num_iterations=1)
+    model.train(num_iterations=5)
     print(model.get_model_parameters())
     model.plot_predictions()
 
