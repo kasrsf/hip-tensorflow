@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 # stop the optimization process after doing a certain number of iterations
 OPTIMIZAITION_MAX_ITERATIONS = 100
-OPTIMIZATION_LOSS_TOLERANCE = 0.005
+OPTIMIZATION_LOSS_TOLERANCE = 0.0005
 PRINT_ITERATION_CHECKPOINT_STEPS = 15
 
 RANDOM_SEED = 42
@@ -123,7 +123,7 @@ class TensorHIP():
         for i in range(num_iterations):
             if verbose == True:
                 print("== Initialization " + str(i + 1))
-            loss_value, model_params = self._fit(iteration_number=i,
+            loss_value, model_params, _ = self._fit(iteration_number=i,
                                                  optimization_algorithm=op,
                                                  regularizer=regularizer)
 
@@ -236,37 +236,32 @@ class TensorHIP():
         iteration_counter = 1
 
         if optimization_algorithm == 'adam':
-            optimizer = tf.train.AdamOptimizer(learning_rate=0.1).minimize(loss)
+            optimizer = tf.train.AdamOptimizer(learning_rate=0.1)
         elif optimization_algorithm == 'adagrad':
-            optimizer = tf.train.AdagradOptimizer(learning_rate=0.5).minimize(loss)
+            optimizer = tf.train.AdagradOptimizer(learning_rate=0.1)
+
+        optimizer_op = optimizer.minimize(loss)
         
+        lslt = []
+
         with tf.Session() as sess:
             tf.set_random_seed(RANDOM_SEED)
             sess.run(tf.global_variables_initializer())
 
             while iteration_counter < OPTIMIZAITION_MAX_ITERATIONS:  
-                # First pass, get predictions to be fed for optimization
-
-                # TODO: Do training in one pass. first just create predictions history. in the second run feed the predictions for optimization.
-                # Need prediction to work without iteration. To make iterative prediction, create array and conver to tensor. 
-                # doesn't seem very efficient. but work for now to see the performance. consult wuga if the model works to improve performance
-                # TODO: Vectorize Implementation (Priority with prediction)
+                # TODO: Make optimization more efficient
                 for index, y in enumerate(self.train_y):
-                    for i in range(index):
-                        try:
-                            predictions[i] = sess.run(
-                                                        pred,
-                                                        feed_dict={
-                                                            x_observed: self.train_x[:, i],
-                                                            pred_history: predictions[:i]
-                                                        }
-                                                    )
-                        except:
-                            eta, mu, theta, C, c = sess.run([eta, mu, theta, C, c])
-                            import ipdb; ipdb.set_trace()
-        
+                    for i in range(index):                    
+                        predictions[i] = sess.run(
+                                                    pred,
+                                                    feed_dict={
+                                                        x_observed: self.train_x[:, i],
+                                                        pred_history: predictions[:i]
+                                                    }
+                                                )
+                        
                     sess.run(
-                            optimizer, 
+                            optimizer_op, 
                             feed_dict={
                                     x_observed: self.train_x[:, index],
                                     pred_history: predictions[:index],
@@ -275,22 +270,21 @@ class TensorHIP():
                             )                            
                 
                 losses = np.zeros_like(self.validation_y, dtype=np.float64)
+            
                 for index, y in enumerate(self.validation_y): 
-                    try:
-                        losses[index], predictions[index] = sess.run(
-                                                [loss, pred],
-                                                feed_dict={
-                                                            x_observed: self.validation_x[:, index],
-                                                            pred_history: predictions[:index],
-                                                            y_truth: y
-                                                        }
-                                                )
-                    except:
-                            eta, mu, theta, C, c = sess.run([eta, mu, theta, C, c])
-                            import ipdb; ipdb.set_trace()
+                    losses[index], predictions[index] = sess.run(
+                                            [loss, pred],
+                                            feed_dict={
+                                                        x_observed: self.validation_x[:, index],
+                                                        pred_history: predictions[:index],
+                                                        y_truth: y
+                                                    }
+                                            )
+                    
                 # Check if optimization iteration produces improvements to the loss value
                 # higher than a relative tolerance: tol = |prev_loss - curr_loss| / min(prev_loss, curr_loss)
-                curr_loss = losses.sum()
+                curr_loss = np.sum(np.sqrt(losses))
+                lslt.append(curr_loss)
                 # TODO: Handle possible division by zero
                 relative_loss = abs(previous_loss - curr_loss) / min(previous_loss, curr_loss)    
                 if relative_loss < OPTIMIZATION_LOSS_TOLERANCE: break
@@ -299,13 +293,12 @@ class TensorHIP():
                 if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
                     print("Iteration {0} ... Relative Loss = {1}".format(iteration_counter, relative_loss))
             
-                previous_loss = losses.sum()
+                previous_loss = curr_loss
                 iteration_counter += 1
-
             params_vals = sess.run([eta, mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
-        
-        return curr_loss, fitted_model_params
+    
+        return curr_loss, fitted_model_params, lslt
     
     def plot_predictions(self, legend=True):
         """
