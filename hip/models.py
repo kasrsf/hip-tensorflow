@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 
 # stop the optimization process after doing a certain number of iterations
 OPTIMIZAITION_MAX_ITERATIONS = 1000
-TOL_PARAM, TOL_LOSS, TOL_GRAD = 1e-8, 1e-8, 1e-8
+TOL_PARAM, TOL_LOSS, TOL_GRAD = 1e-4, 1e-2, 1e-4
+LEARNING_RATE = 0.1
 PRINT_ITERATION_CHECKPOINT_STEPS = 20
 
 RANDOM_SEED = 42
@@ -26,30 +27,30 @@ class TensorHIP():
         num_test:
     """
     def __init__(self, 
-                 x,
-                 y=None,
+                 xs,
+                 ys=None,
                  train_split_size=0.8,
                  params=None
                 ):
-        self.x = np.asarray(x)
-        if y is None:
+        self.num_of_series = len(xs)
+        self.train_split_size = train_split_size
+        self.x = np.asarray(xs)
+
+        self.series_length = self.x[0].shape[1]
+        self.num_of_exogenous_series = self.x[0].shape[0]
+
+        if ys is None:
+            # assume that xs is also 1d
             self.y = np.zeros(self.x.shape[1])
         else:
-            self.y = np.array(y)
+            self.y = np.asarray(ys)
 
+        #TODO: Move split to _fit -> should correct plot_predictions too
         # do the train-validation-test split 
         # (use same split: Train = 0.8 * 0.8 * length, 
         # validation = 0.2 * 0.8 * length, test = 0.2 * length)
-        test_split = int(len(self.y) * train_split_size)
-        validation_split = int(test_split * train_split_size)
-        self.train_x, self.train_y = self.x[:, :validation_split], self.y[:validation_split]
-        self.validation_x, self.validation_y = (
-                                                  self.x[:, validation_split:test_split], 
-                                                  self.y[validation_split:test_split]
-                                               )  
-        self.test_x, self.test_y = self.x[:, test_split:], self.y[test_split:]
+        
         # model parameters
-        #self.gamma = 0
         self.model_params = dict()
 
         if params is not None:
@@ -166,16 +167,22 @@ class TensorHIP():
         self._init_tf_model_variables()
         
         pred = self.predict(x_observed)
+        predictions = []
 
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
-            predictions = sess.run(
-                                    pred, 
-                                    feed_dict={
-                                        x_observed: self.x
-                                    }
-                                  )
 
+            for i in range(self.num_of_series):    
+                x = self.x[i]
+                y = self.y[i]
+                
+                new_predictions = sess.run(
+                                        pred, 
+                                        feed_dict={
+                                            x_observed: x
+                                        }
+                                    )
+                predictions.append(new_predictions)
         # TODO: What to do when predictions are zero (enforce max(0, pred)?)
         # for i in range(len(predictions)):
         #     if predictions[i] < 0:
@@ -199,10 +206,9 @@ class TensorHIP():
         #                       shape=(),
         #                       initializer=tf.random_uniform_initializer(0, 30, seed=RANDOM_SEED + iteration_number)
         #                     )
-
         mu = tf.get_variable(
                              name='mu',
-                             shape=(1, len(self.x)),
+                             shape=(1, self.num_of_exogenous_series),
                              initializer=tf.random_uniform_initializer(-3, 3, seed=RANDOM_SEED + iteration_number)
                             )        
 
@@ -243,126 +249,134 @@ class TensorHIP():
         #    loss = tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred))) + tf.reduce_sum(tf.square(mu)) + tf.square(C)
 
         previous_loss = np.inf
-        iteration_counter = 1
 
-        optimizer = tf.train.AdamOptimizer(learning_rate=0.01)        
+        optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)        
         train_op = optimizer.minimize(loss)
         grad = tf.gradients(loss, [mu, theta, C, c])
         
+        validation_loss = 0 
+
         with tf.Session() as sess:
             tf.set_random_seed(RANDOM_SEED)
             sess.run(tf.global_variables_initializer())
             
-            observed_mu, observed_theta, observed_C, observed_c = sess.run([[mu], [theta], [C], [c]])
-
-            observed_loss = sess.run(
-                                    [loss],
-                                    feed_dict={
-                                                y_truth: self.train_y,
-                                                x_observed: self.train_x
-                                            }
-                                    )
-            observed_grad = sess.run(
-                                    [grad],
-                                    feed_dict={
-                                                y_truth: self.train_y,
-                                                x_observed: self.train_x
-                                            }
-                                    )
-        
-            print(' iter | mu | theta | C | c | loss ')
-        
-            while iteration_counter < OPTIMIZAITION_MAX_ITERATIONS: 
-                # gradient step                         
-                sess.run(
-                        train_op, 
-                        feed_dict={
-                                x_observed: self.train_x,
-                                y_truth: self.train_y
-                            }
-                        )   
+            for i in range(self.num_of_series):
+                print("--- Fitting target series #{}".format(i))
+                x = self.x[i]
+                y = self.y[i]
                 
-                # get new parameters
-                curr_mu, curr_theta, curr_C, curr_c = sess.run([mu, theta, C, c]) 
-                param_diffs= np.subtract([curr_mu, curr_theta, curr_C, curr_c],
-                                         [observed_mu[-1], observed_theta[-1], observed_C[-1], observed_c[-1]])
-                param_diffs_flattened = np.column_stack(param_diffs).ravel()
-                difference_normalized = np.linalg.norm(param_diffs_flattened)
-        
-                # update loss
-                curr_loss = sess.run(
-                                    loss,
-                                    feed_dict={
-                                                x_observed: self.train_x,
-                                                y_truth: self.train_y
-                                            }
-                                    )
-                loss_difference = np.abs(curr_loss - observed_loss[-1])
-
-                # update gradient
-                curr_grad = sess.run(
-                                    grad,
-                                    feed_dict={
-                                                x_observed: self.train_x,
-                                                y_truth: self.train_y
-                                            }
-                                    )
-                curr_grad_flattened = np.column_stack(curr_grad).ravel()
-                grad_norm = np.linalg.norm(curr_grad_flattened)
-
-                # save new values
-                observed_mu.append(curr_mu)
-                observed_theta.append(curr_theta)
-                observed_C.append(curr_C)
-                observed_theta.append(curr_c)
-                observed_loss.append(curr_loss)
-                observed_grad.append(curr_grad)
+                test_split = int(len(y) * self.train_split_size)
+                validation_split = int(test_split * self.train_split_size)
+                train_x, train_y = x[:, :validation_split], y[:validation_split]
+                validation_x, validation_y = (
+                                                        x[:, validation_split:test_split], 
+                                                        y[validation_split:test_split]
+                                                    )  
+                test_x, test_y = x[:, test_split:], y[test_split:]
                 
-                if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
-                    print(' {} | {} | {} | {} | {} | {}'
-                        .format(
-                            iteration_counter,
-                            curr_mu,
-                            curr_theta,
-                            curr_C,
-                            curr_c,
-                            curr_loss
-                            )
-                        )
-                #check termination conditions
-                if difference_normalized < TOL_PARAM:
-                    print('Parameter convergence in {} iterations!'.format(iteration_counter))
-                    break
-
-                if loss_difference < TOL_LOSS:
-                    print('Loss function convergence in {} iterations!'.format(iteration_counter))
-                    break
-
-                if grad_norm < TOL_GRAD:
-                    print('Gradient convergence in {} iterations!'.format(iteration_counter))
-                    break
-                
-                iteration_counter += 1
+                observed_mu, observed_theta, observed_C, observed_c = sess.run([[mu], [theta], [C], [c]])
+                observed_loss = sess.run(
+                                        [loss],
+                                        feed_dict={
+                                                    y_truth: train_y,
+                                                    x_observed: train_x
+                                                }
+                                        )
+                observed_grad = sess.run(
+                                        [grad],
+                                        feed_dict={
+                                                    y_truth: train_y,
+                                                    x_observed: train_x
+                                                }
+                                        )
             
-            prds = sess.run(
-                    pred,
-                    feed_dict={
-                                x_observed: self.train_x,
-                                y_truth: self.train_y
-                            }
-                    )
-
-            validation_loss = sess.run(
+                print(' iter | mu | theta | C | c | loss ')
+                
+                iteration_counter = 1
+                while iteration_counter < OPTIMIZAITION_MAX_ITERATIONS: 
+                    # gradient step                         
+                    sess.run(
+                            train_op, 
+                            feed_dict={
+                                    x_observed: train_x,
+                                    y_truth: train_y
+                                }
+                            )   
+                    
+                    # get new parameters
+                    curr_mu, curr_theta, curr_C, curr_c = sess.run([mu, theta, C, c]) 
+                    param_diffs= np.subtract([curr_mu, curr_theta, curr_C, curr_c],
+                                            [observed_mu[-1], observed_theta[-1], observed_C[-1], observed_c[-1]])
+                    param_diffs_flattened = np.column_stack(param_diffs).ravel()
+                    difference_normalized = np.linalg.norm(param_diffs_flattened)
+            
+                    # update loss
+                    curr_loss = sess.run(
                                         loss,
                                         feed_dict={
-                                                    x_observed: self.validation_x,
-                                                    y_truth: self.validation_y
+                                                    x_observed: train_x,
+                                                    y_truth: train_y
                                                 }
-                                    ) 
+                                        )
+                    loss_difference = np.abs(curr_loss - observed_loss[-1])
+
+                    # update gradient
+                    curr_grad = sess.run(
+                                        grad,
+                                        feed_dict={
+                                                    x_observed: train_x,
+                                                    y_truth: train_y
+                                                }
+                                        )
+                    curr_grad_flattened = np.column_stack(curr_grad).ravel()
+                    grad_norm = np.linalg.norm(curr_grad_flattened)
+
+                    # save new values
+                    observed_mu.append(curr_mu)
+                    observed_theta.append(curr_theta)
+                    observed_C.append(curr_C)
+                    observed_c.append(curr_c)
+                    observed_loss.append(curr_loss)
+                    observed_grad.append(curr_grad)
+                    
+                    if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
+                        print(' {} | {} | {} | {} | {} | {}'
+                            .format(
+                                iteration_counter,
+                                curr_mu,
+                                curr_theta,
+                                curr_C,
+                                curr_c,
+                                curr_loss
+                                )
+                            )
+
+                    #check termination conditions
+                    if difference_normalized < TOL_PARAM:
+                        print('Parameter convergence in {} iterations!'.format(iteration_counter))
+                        break
+
+                    if loss_difference < TOL_LOSS:
+                        print('Loss function convergence in {} iterations!'.format(iteration_counter))
+                        break
+
+                    if grad_norm < TOL_GRAD:
+                        print('Gradient convergence in {} iterations!'.format(iteration_counter))
+                        break
+                    
+                    iteration_counter += 1
+
+                validation_loss += sess.run(
+                                            loss,
+                                            feed_dict={
+                                                        x_observed: validation_x,
+                                                        y_truth: validation_y
+                                                    }
+                                        ) 
 
             params_vals = sess.run([mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
-    
+            
         return validation_loss, fitted_model_params
     
     def plot_predictions(self, legend=True):
@@ -370,41 +384,51 @@ class TensorHIP():
             Plot the current predictions from the fitted model 
         """
         predictions = self.get_predictions()
-        
-        data_length = len(self.y)
-        data_test_split_point = len(self.train_y) + len(self.validation_y)
+        data_length = self.series_length
+        data_test_split_point = (int)(self.series_length * self.train_split_size)
 
-        plt.figure(figsize=(8, 8))
-        plt.axvline(data_test_split_point, color='k')
-        plt.plot(np.arange(data_length), self.y, 'k--', label='Observed #views')
+        srows = (int)(np.ceil(np.sqrt(self.num_of_series)))
 
-        colors = iter(plt.cm.rainbow(np.linspace(0, 1, self.x.shape[0])))
-        for index, exo_source in enumerate(self.x):
-            c = next(colors)
-            plt.plot(np.arange(data_length), exo_source, c=c, alpha=0.3)
+        fig, axes = plt.subplots(srows, srows, sharex='all')
 
-        # plot predictions on training data with a different alpha to make the plot more clear            
-        plt.plot(
-                    np.arange(data_test_split_point+1),
-                    predictions[:data_test_split_point+1], 
-                    'b-',
-                    alpha=0.5,
-                    label='Model Fit'
-                )
-        plt.plot(
-                    np.arange(data_test_split_point, data_length),
-                    predictions[data_test_split_point:], 
-                    'b-',
-                    alpha=1,
-                    label='Model Predictions'
-                )
+        for i in range(len(predictions)):
+            row = (int)(i / srows)
+            col = (int)(i % srows)
 
-        if legend:
-            plt.legend()        
-        plt.xlabel('Time')
-        plt.ylabel('Y')
-        plt.title("Prediction Vs. Truth")
+            x = self.x[i]
+            y_truth = self.y[i]
+            y_pred = predictions[i]
 
+            if len(predictions) == 1:
+                ax = plt
+            else:
+                ax = axes[row, col]
+
+            ax.axvline(data_test_split_point, color='k')
+            ax.plot(np.arange(data_length), y_truth, 'k--', label='Observed #views')
+
+            colors = iter(plt.cm.rainbow(np.linspace(0, 1, self.x.shape[0])))
+            for index, exo_source in enumerate(x):
+                c = next(colors)
+                ax.plot(np.arange(data_length), exo_source, c=c, alpha=0.3)
+
+            # plot predictions on training data with a different alpha to make the plot more clear            
+            ax.plot(
+                        np.arange(data_test_split_point+1),
+                        y_pred[:data_test_split_point+1], 
+                        'b-',
+                        alpha=0.5,
+                        label='Model Fit'
+                    )
+            ax.plot(
+                        np.arange(data_test_split_point, data_length),
+                        y_pred[data_test_split_point:], 
+                        'b-',
+                        alpha=1,
+                        label='Model Predictions'
+                    )
+
+        fig.tight_layout()
         plt.show()
 
     def get_model_parameters(self):
