@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # stop the optimization process after doing a certain number of iterations
-OPTIMIZAITION_MAX_ITERATIONS = 1000
+OPTIMIZAITION_MAX_ITERATIONS = 100
 TOL_PARAM, TOL_LOSS, TOL_GRAD = 1e-4, 1e-2, 1e-4
 LEARNING_RATE = 0.1
 PRINT_ITERATION_CHECKPOINT_STEPS = 20
@@ -30,26 +30,30 @@ class TensorHIP():
                  xs,
                  ys=None,
                  train_split_size=0.8,
+                 l2_param=0,
                  params=None
                 ):
         self.num_of_series = len(xs)
-        self.train_split_size = train_split_size
         self.x = np.asarray(xs)
 
+        # store train-validation-test split points 
+        self.train_split_size = train_split_size
         self.series_length = self.x[0].shape[1]
+        self.num_train = int(self.series_length * train_split_size)
+        self.num_cv_train = int(self.num_train * train_split_size)
+        self.num_cv_test = self.num_train - self.num_cv_train
+        self.num_test = self.series_length - self.num_train
+
         self.num_of_exogenous_series = self.x[0].shape[0]
+        
+        self.validation_loss = np.inf
 
         if ys is None:
             # assume that xs is also 1d
             self.y = np.zeros(self.x.shape[1])
         else:
             self.y = np.asarray(ys)
-
-        #TODO: Move split to _fit -> should correct plot_predictions too
-        # do the train-validation-test split 
-        # (use same split: Train = 0.8 * 0.8 * length, 
-        # validation = 0.2 * 0.8 * length, test = 0.2 * length)
-        
+    
         # model parameters
         self.model_params = dict()
 
@@ -59,6 +63,8 @@ class TensorHIP():
             self.model_params['theta'] = params['theta']
             self.model_params['C'] = params['C']
             self.model_params['c'] = params['c']
+
+        self.l2_param = l2_param
                     
     def time_decay_base(self, i):
         """
@@ -116,7 +122,7 @@ class TensorHIP():
         
         return predictions
                 
-    def train(self, num_iterations, op='adagrad', verbose=True, regularizer=None):
+    def train(self, num_iterations, op='adagrad', verbose=True):
         """
             Fit the best HIP model using multiple random restarts by
             minimizing the loss value of the model 
@@ -136,17 +142,15 @@ class TensorHIP():
                 best loss value achieved among the iterations
         """
         self.model_params = dict()
-
-        best_loss = np.inf
+        
         for i in range(num_iterations):
             if verbose == True:
                 print("== Initialization " + str(i + 1))
             loss_value, model_params = self._fit(iteration_number=i,
-                                                 optimization_algorithm=op,
-                                                 regularizer=regularizer)
+                                                 optimization_algorithm=op)
 
-            if loss_value < best_loss:
-                best_loss = loss_value
+            if loss_value < self.validation_loss:
+                self.validation_loss = loss_value
                 self.model_params = model_params
         
     def _init_tf_model_variables(self):
@@ -190,7 +194,7 @@ class TensorHIP():
                 
         return predictions
    
-    def _fit(self, iteration_number, optimization_algorithm='adagrad', regularizer=None):
+    def _fit(self, iteration_number, optimization_algorithm='adagrad'):
         """
             Internal method for fitting the model at each iteration of the
             training process
@@ -242,11 +246,10 @@ class TensorHIP():
 
         pred = self.predict(x_observed, params)
         
-        # TODO: Check effect of adding regularization
-        #if regularizer is None:
-        loss = tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred)))
-        #elif regularizer == 'l2':
-        #    loss = tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred))) + tf.reduce_sum(tf.square(mu)) + tf.square(C)
+        loss = (
+                tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred))) + 
+                self.l2_param * (tf.reduce_sum(tf.square(mu)) + tf.square(C))
+               ) 
 
         previous_loss = np.inf
 
@@ -267,12 +270,8 @@ class TensorHIP():
                 
                 test_split = int(len(y) * self.train_split_size)
                 validation_split = int(test_split * self.train_split_size)
-                train_x, train_y = x[:, :validation_split], y[:validation_split]
-                validation_x, validation_y = (
-                                                        x[:, validation_split:test_split], 
-                                                        y[validation_split:test_split]
-                                                    )  
-                test_x, test_y = x[:, test_split:], y[test_split:]
+                train_x, train_y = x[:, :self.num_cv_train], y[:self.num_cv_train]
+                validation_x, validation_y = x[:, self.num_cv_train:self.num_train], y[self.num_cv_train:self.num_train]
                 
                 observed_mu, observed_theta, observed_C, observed_c = sess.run([[mu], [theta], [C], [c]])
                 observed_loss = sess.run(
@@ -290,7 +289,7 @@ class TensorHIP():
                                                 }
                                         )
             
-                print(' iter | mu | theta | C | c | loss ')
+                print(' iter | mu | theta | C | c | validation loss ')
                 
                 iteration_counter = 1
                 while iteration_counter < OPTIMIZAITION_MAX_ITERATIONS: 
@@ -379,6 +378,20 @@ class TensorHIP():
             
         return validation_loss, fitted_model_params
     
+    def get_test_rmse(self):
+        loss = 0
+
+        predictions = self.get_predictions()
+        data_length = self.series_length
+        
+        for i in range(len(predictions)):
+            y_truth = self.y[i]
+            y_pred = predictions[i]
+
+            loss += np.sqrt(np.sum((y_pred[self.num_train:] - y_truth[self.num_train:]) ** 2))
+    
+        return loss / (float)(self.num_test)
+
     def plot_predictions(self, legend=True):
         """
             Plot the current predictions from the fitted model 
