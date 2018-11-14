@@ -3,10 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # stop the optimization process after doing a certain number of iterations
-OPTIMIZAITION_MAX_ITERATIONS = 100
-TOL_PARAM, TOL_LOSS, TOL_GRAD = 1e-4, 1e-2, 1e-4
-LEARNING_RATE = 0.1
-PRINT_ITERATION_CHECKPOINT_STEPS = 20
+TOL_PARAM, TOL_LOSS, TOL_GRAD = 1e-6, 1e-6, 1e-6
+PRINT_ITERATION_CHECKPOINT_STEPS = 100
 
 RANDOM_SEED = 42
 class TensorHIP():
@@ -31,7 +29,11 @@ class TensorHIP():
                  ys=None,
                  train_split_size=0.8,
                  l2_param=0,
-                 params=None
+                 learning_rate=0.1,
+                 num_initializations=5,
+                 max_iterations=1000,
+                 params=None,
+                 verbose=True
                 ):
         self.num_of_series = len(xs)
         self.x = np.asarray(xs)
@@ -65,7 +67,16 @@ class TensorHIP():
             self.model_params['c'] = params['c']
 
         self.l2_param = l2_param
+        self.learning_rate = learning_rate
+        self.max_iterations = max_iterations
+        self.num_initializations = num_initializations
+
+        self.verbose = verbose
                     
+    def print_log(self, msg):
+        if self.verbose is True:
+            print(msg)
+
     def time_decay_base(self, i):
         """
             Kernel Base for the time-decaying exponential kernel
@@ -78,7 +89,7 @@ class TensorHIP():
         """
         return tf.cast(tf.range(i, 0, -1), tf.float32)
 
-    def predict(self, x, model_params=None,se=None):
+    def predict(self, x, model_params=None):
         """
             Predict the future values of X series given the previous values in
             the series and a list of influential series.
@@ -121,8 +132,22 @@ class TensorHIP():
                                          )
         
         return predictions
+
+    def get_test_rmse(self):
+        loss = 0
+
+        predictions = self.get_predictions()
+        data_length = self.series_length
+        
+        for i in range(len(predictions)):
+            y_truth = self.y[i]
+            y_pred = predictions[i]
+
+            loss += np.sqrt(np.sum((y_pred[self.num_train:] - y_truth[self.num_train:]) ** 2))
+    
+        return loss / (float)(self.num_test)
                 
-    def train(self, num_iterations, op='adagrad', verbose=True):
+    def train(self, op='adagrad'):
         """
             Fit the best HIP model using multiple random restarts by
             minimizing the loss value of the model 
@@ -143,16 +168,16 @@ class TensorHIP():
         """
         self.model_params = dict()
         
-        for i in range(num_iterations):
-            if verbose == True:
-                print("== Initialization " + str(i + 1))
+        for i in range(self.num_initializations):
+            
+            self.print_log("== Initialization " + str(i + 1))
             loss_value, model_params = self._fit(iteration_number=i,
                                                  optimization_algorithm=op)
 
             if loss_value < self.validation_loss:
                 self.validation_loss = loss_value
                 self.model_params = model_params
-        
+
     def _init_tf_model_variables(self):
         #eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                        
         mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
@@ -253,7 +278,7 @@ class TensorHIP():
 
         previous_loss = np.inf
 
-        optimizer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)        
+        optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)        
         train_op = optimizer.minimize(loss)
         grad = tf.gradients(loss, [mu, theta, C, c])
         
@@ -264,7 +289,7 @@ class TensorHIP():
             sess.run(tf.global_variables_initializer())
             
             for i in range(self.num_of_series):
-                print("--- Fitting target series #{}".format(i))
+                self.print_log("--- Fitting target series #{}".format(i))
                 x = self.x[i]
                 y = self.y[i]
                 
@@ -288,11 +313,11 @@ class TensorHIP():
                                                     x_observed: train_x
                                                 }
                                         )
-            
-                print(' iter | mu | theta | C | c | validation loss ')
+
+                self.print_log(' iter | mu | theta | C | c | validation loss ')
                 
                 iteration_counter = 1
-                while iteration_counter < OPTIMIZAITION_MAX_ITERATIONS: 
+                while iteration_counter < self.max_iterations: 
                     # gradient step                         
                     sess.run(
                             train_op, 
@@ -339,7 +364,8 @@ class TensorHIP():
                     observed_grad.append(curr_grad)
                     
                     if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
-                        print(' {} | {} | {} | {} | {} | {}'
+                        self.print_log(
+                            ' {} | {} | {} | {} | {} | {}'
                             .format(
                                 iteration_counter,
                                 curr_mu,
@@ -352,15 +378,15 @@ class TensorHIP():
 
                     #check termination conditions
                     if difference_normalized < TOL_PARAM:
-                        print('Parameter convergence in {} iterations!'.format(iteration_counter))
+                        self.print_log('Parameter convergence in {} iterations!'.format(iteration_counter))
                         break
 
                     if loss_difference < TOL_LOSS:
-                        print('Loss function convergence in {} iterations!'.format(iteration_counter))
+                        self.print_log('Loss function convergence in {} iterations!'.format(iteration_counter))
                         break
 
                     if grad_norm < TOL_GRAD:
-                        print('Gradient convergence in {} iterations!'.format(iteration_counter))
+                        self.print_log('Gradient convergence in {} iterations!'.format(iteration_counter))
                         break
                     
                     iteration_counter += 1
@@ -378,77 +404,11 @@ class TensorHIP():
             
         return validation_loss, fitted_model_params
     
-    def get_test_rmse(self):
-        loss = 0
-
-        predictions = self.get_predictions()
-        data_length = self.series_length
-        
-        for i in range(len(predictions)):
-            y_truth = self.y[i]
-            y_pred = predictions[i]
-
-            loss += np.sqrt(np.sum((y_pred[self.num_train:] - y_truth[self.num_train:]) ** 2))
-    
-        return loss / (float)(self.num_test)
-
-    def plot_predictions(self, legend=True):
-        """
-            Plot the current predictions from the fitted model 
-        """
-        predictions = self.get_predictions()
-        data_length = self.series_length
-        data_test_split_point = (int)(self.series_length * self.train_split_size)
-
-        srows = (int)(np.ceil(np.sqrt(self.num_of_series)))
-
-        fig, axes = plt.subplots(srows, srows, sharex='all')
-
-        for i in range(len(predictions)):
-            row = (int)(i / srows)
-            col = (int)(i % srows)
-
-            x = self.x[i]
-            y_truth = self.y[i]
-            y_pred = predictions[i]
-
-            if len(predictions) == 1:
-                ax = plt
-            else:
-                ax = axes[row, col]
-
-            ax.axvline(data_test_split_point, color='k')
-            ax.plot(np.arange(data_length), y_truth, 'k--', label='Observed #views')
-
-            colors = iter(plt.cm.rainbow(np.linspace(0, 1, self.x.shape[0])))
-            for index, exo_source in enumerate(x):
-                c = next(colors)
-                ax.plot(np.arange(data_length), exo_source, c=c, alpha=0.3)
-
-            # plot predictions on training data with a different alpha to make the plot more clear            
-            ax.plot(
-                        np.arange(data_test_split_point+1),
-                        y_pred[:data_test_split_point+1], 
-                        'b-',
-                        alpha=0.5,
-                        label='Model Fit'
-                    )
-            ax.plot(
-                        np.arange(data_test_split_point, data_length),
-                        y_pred[data_test_split_point:], 
-                        'b-',
-                        alpha=1,
-                        label='Model Predictions'
-                    )
-
-        fig.tight_layout()
-        plt.show()
-
     def get_model_parameters(self):
         """
             Getter method to get the model parameters
         """
-        return self.model_params
+        return self.model_params.copy()
 
     def get_test_prediction_error(self):
         predictions = self.get_predictions()
@@ -457,3 +417,12 @@ class TensorHIP():
         test_preds = predictions[test_split_start:]
 
         return np.sqrt(np.sum((self.test_y - test_preds) ** 2))
+
+    def plot(self, ax=None):
+        predictions = self.get_predictions()[0]
+        
+        ax = ax or plt.gca()
+        ax.plot(self.y[0], 'k--')
+        ax.plot(predictions, 'r-')
+        return ax
+        
