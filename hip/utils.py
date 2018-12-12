@@ -51,7 +51,7 @@ def plot_predictions(y_truth, y_predictions, xs=None, train_test_split_point=0.8
                         label='Model Predictions'
                     )
 
-        return axes
+        plt.show()
 
 def get_test_rmse(truth, predictions, train_test_split=0.8):
         loss = 0
@@ -65,40 +65,52 @@ def get_test_rmse(truth, predictions, train_test_split=0.8):
     
         return loss
 
-
 class TimeSeriesScaler():
-    def transform_x(self, xs):
+    def __init__(self):
+        self.y_mins = []
+        self.y_maxs = []
+
+    def transform_x(self, x):
+        x_min = np.min(x)
+        x_max = np.max(x)
+        return (x - x_min) / (x_max - x_min)
+
+    def transform_xs(self, xs):
         scaled_xs = []
         for x_series in xs:
             scaled_x_series = []
             for x in x_series:
-                x_min = np.min(x)
-                x_max = np.max(x)
-                scaled_x = (x - x_min) / (x_max - x_min)
+                scaled_x = self.transform_x(x)
 
                 scaled_x_series.append(scaled_x)
             scaled_xs.append(scaled_x_series)
 
-        return scaled_xs
+        return np.asarray(scaled_xs)
     
-    def transform_y(self, ys):
+    def transform_add_y(self, y):
+        y_min = np.min(y)
+        y_max = np.max(y)
+
+        scaled_y = (y - y_min) / (y_max - y_min)
+
+        self.y_mins.append(y_min)
+        self.y_maxs.append(y_max)
+
+        return scaled_y
+
+    def transform_ys(self, ys):
         self.y_mins = []
         self.y_maxs = []
 
         scaled_ys = []
         for y in ys:
-            y_min = np.min(y)
-            y_max = np.max(y)
-
-            self.y_mins.append(y_min)
-            self.y_maxs.append(y_max)
-            scaled_y = (y - y_min) / (y_max - y_min)
+            scaled_y = self.transform_add_y(y)
 
             scaled_ys.append(scaled_y)
 
-        return scaled_ys
+        return np.asarray(scaled_ys)
 
-    def invert_transform_y(self, scaled_ys):
+    def invert_transform_ys(self, scaled_ys):
         rescaled_ys = []
         for index, scaled_y in enumerate(scaled_ys):
             rescaled_y = (
@@ -108,4 +120,4 @@ class TimeSeriesScaler():
 
             rescaled_ys.append(rescaled_y)
 
-        return rescaled_ys
+        return np.asarray(rescaled_ys)
