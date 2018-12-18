@@ -37,14 +37,15 @@ class TensorHIP():
                  learning_rate=0.5,
                  num_initializations=3,
                  initalization_method='normal',
-                 max_iterations=100,
+                 max_iterations=1000,
                  params=None,
                  fix_c_param_value=None,
                  fix_theta_param_value=None,
                  fix_C_param_value=1.0,
-                 scale_series=True,
-                 verbose=False,
-                 optimizer='l-bfgs'
+                 scale_series=False,
+                 verbose=True,
+                 optimizer='l-bfgs',
+                 feature_names=None
                 ):
         self.num_of_series = len(xs)
         self.x = np.asarray(xs)
@@ -100,6 +101,7 @@ class TensorHIP():
         self.scale_series = scale_series
         if scale_series is True:
             self.series_scaler = TimeSeriesScaler()
+        self.feature_names = feature_names
 
         self.optimizer = optimizer
 
@@ -317,7 +319,6 @@ class TensorHIP():
                     x = self.series_scaler.transform_x(self.x[i])
                 else:
                     x = self.x[i]
-                
                 new_predictions = sess.run(
                                         pred, 
                                         feed_dict={
@@ -326,10 +327,7 @@ class TensorHIP():
                                     )
                 predictions.append(new_predictions)
 
-        if self.scale_series is True:
-            return self.series_scaler.invert_transform_ys(predictions)
-        else:
-            return predictions
+        return predictions
    
     def _fit(self, iteration_number, op='adam'):
         """
@@ -380,10 +378,9 @@ class TensorHIP():
 
             if self.scale_series is True:
                 xs = self.series_scaler.transform_xs(self.x)
-                ys = self.series_scaler.transform_ys(self.y)
             else:
                 xs = self.x
-                ys = self.y
+            ys = self.y
 
             for i in range(self.num_of_series):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
@@ -552,6 +549,12 @@ class TensorHIP():
 
         return np.sqrt(error / len(predictions))
 
+    def get_weights_dict(self):
+        if self.feature_names != None:
+            return dict(zip(self.feature_names, list(self.model_params['mu'][0])))
+
+        return list(self.model_params['mu'][0])
+
     def plot(self, ax=None):
         predictions = self.get_predictions()
         
@@ -564,21 +567,21 @@ class TensorHIP():
         display_plot = False
 
         if ax is None:
+            display_plot = True
             fig, axes = plt.subplots(srows, srows, sharex='all')
+            fig.set_figheight(10)
+            fig.set_figwidth(10)
 
         for i in range(num_of_series):
             row = (int)(i / srows)
             col = (int)(i % srows)
             truth = self.y[i]
             pred = predictions[i]
-
-            if ax is None:
-                display_plot = True
+            if display_plot:
                 if num_of_series == 1:
                     ax = plt
                 else:
                     ax = axes[row, col]
-    
             ax.axvline(data_test_split_point, color='k')
             ax.plot(np.arange(data_length), truth, 'k--', label='Observed #views')
 
@@ -599,4 +602,4 @@ class TensorHIP():
                     )
         
         if display_plot is True:
-            fig.show()
+            plt.show()
