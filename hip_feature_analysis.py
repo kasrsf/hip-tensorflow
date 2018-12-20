@@ -4,7 +4,7 @@ import pandas as pd
 import sys
 
 from hip.models import TensorHIP
-from hip.utils import load_data_from_csv, save_params_to_tsv
+from hip.utils import load_data_from_csv, print_params_to_tsv
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
@@ -28,8 +28,8 @@ if __name__ == '__main__':
     hip_model = TensorHIP(xs=xs,
                   ys=ys,    
                   feature_names=feature_names,
-                  verbose=True)
+                  verbose=False)
     hip_model.train()    
 
     model_params =  hip_model.get_model_parameters()
-    save_params_to_tsv(params=model_params, feature_name=feature_names[feature_index])
+    print_params_to_tsv(params=model_params, feature_name=feature_names[feature_index])

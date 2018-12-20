@@ -12,16 +12,17 @@ def load_data_from_csv(filename):
     target_name = list(target)[0]
     return features.values.T, target.values.T[0], feature_names, target_name
 
-def save_params_to_tsv(params, feature_name):
+def print_params_to_tsv(params, feature_name):
     eta = params['eta']
     mu = params['mu'][0][0]
     c = params['c']
     theta = params['theta']
 
-    with open('{}.tsv'.format(feature_name), 'w') as tsvfile:
-        writer = csv.writer(tsvfile, delimiter='\t')
-        writer.writerow(['eta', 'mu', 'c', 'theta'])
-        writer.writerow([eta, mu, c, theta])
+    param_names = ['eta', 'mu', 'c', 'theta']
+    param_values = [eta, mu, c, theta]
+
+    print('\t'.join([str(x) for x in param_names]))
+    print('\t'.join([str(x) for x in param_values]))
 
 def plot_predictions(y_truth, y_predictions, xs=None, train_test_split_point=0.8, legend=True):
         """
