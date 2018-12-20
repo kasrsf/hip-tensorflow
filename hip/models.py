@@ -1,3 +1,4 @@
+import logging
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,18 +33,18 @@ class TensorHIP():
                  xs,
                  ys=None,
                  train_split_size=0.8,
-                 l1_param=0,
+                 l1_param=0.1,
                  l2_param=0,
                  learning_rate=0.5,
-                 num_initializations=3,
+                 num_initializations=5,
                  initalization_method='normal',
                  max_iterations=1000,
                  params=None,
                  fix_c_param_value=None,
                  fix_theta_param_value=None,
                  fix_C_param_value=1.0,
-                 scale_series=False,
-                 verbose=True,
+                 scale_series=True,
+                 verbose=False,
                  optimizer='l-bfgs',
                  feature_names=None
                 ):
@@ -98,16 +99,20 @@ class TensorHIP():
         self.initalization_method = initalization_method
 
         self.verbose = verbose
+        if verbose is True:
+            logging.basicConfig(level=logging.INFO)
+
         self.scale_series = scale_series
         if scale_series is True:
             self.series_scaler = TimeSeriesScaler()
+            self.x = self.series_scaler.transform_xs(self.x)
+
         self.feature_names = feature_names
 
         self.optimizer = optimizer
 
-    def print_log(self, msg):
-        if self.verbose is True:
-            print(msg)
+    def print_log(self, msg):    
+        logging.info(msg)
 
     def time_decay_base(self, i):
         """
@@ -119,7 +124,7 @@ class TensorHIP():
             i
                 time series length
         """
-        return tf.cast(tf.range(i, tf.maximum(i - 7, 0), -1), tf.float32)
+        return tf.cast(tf.range(i, 0, -1), tf.float32)
 
     def predict(self, x, model_params=None):
         """
@@ -143,9 +148,9 @@ class TensorHIP():
         def loop_body(i, x, pred_history):
             exogenous = tf.reduce_sum(tf.multiply(model_params['mu'], x[:, i]))
             endogenous = model_params['C'] * tf.reduce_sum(
-                                                            pred_history[tf.maximum(i-7, 0):] *
+                                                            pred_history *
                                                             tf.pow(self.time_decay_base(tf.shape(pred_history)[0]) + tf.maximum(0.0, model_params['c']), 
-                                                                tf.tile([-1 - model_params['theta']], [tf.minimum(7, tf.shape(pred_history)[0])]))
+                                                                tf.tile([-1 - model_params['theta']], [tf.shape(pred_history)[0]]))
                                                         )
             new_prediction = tf.add_n([bias, exogenous, endogenous]) 
             pred_history = tf.concat([pred_history, [new_prediction]], axis=0)
@@ -202,13 +207,13 @@ class TensorHIP():
                 eta = tf.get_variable(
                                 name='eta',
                                 shape=(),
-                                initializer=tf.random_uniform_initializer(0, 30, seed=random_seed)
+                                initializer=tf.random_uniform_initializer(0, 1, seed=random_seed)
                                 )
             elif self.initalization_method == 'normal':
                 eta = tf.get_variable(
                                 name='eta',
                                 shape=(),
-                                initializer=tf.random_normal_initializer(mean=15, stddev=5, seed=random_seed)
+                                initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed)
                                 )
         
         if 'mu' in self.model_params:
@@ -218,13 +223,13 @@ class TensorHIP():
                 mu = tf.get_variable(
                                 name='mu',
                                 shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_uniform_initializer(-3, 3, seed=random_seed)
+                                initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed)
                                 )    
             elif self.initalization_method == 'normal':
                 mu = tf.get_variable(
                                 name='mu',
                                 shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_normal_initializer(mean=0, stddev=3, seed=random_seed)
+                                initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed)
                                 )
             
 
@@ -238,7 +243,7 @@ class TensorHIP():
                 theta = tf.get_variable(
                             name='theta',
                             shape=(),
-                            initializer=tf.random_uniform_initializer(0, 3, seed=random_seed),
+                            initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed),
                             constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                             )  
             elif self.initalization_method == 'normal':
@@ -259,7 +264,7 @@ class TensorHIP():
                 C = tf.get_variable(
                         name='C',
                         shape=(),
-                        initializer=tf.random_uniform_initializer(0, 1, seed=random_seed),
+                        initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed),
                         constraint=lambda x: tf.clip_by_value(x, 0.01, np.infty)
                     )
             elif self.initalization_method == 'normal':
@@ -280,14 +285,14 @@ class TensorHIP():
                 c = tf.get_variable(
                         name='c',
                         shape=(),
-                        initializer=tf.random_uniform_initializer(0, 1, seed=random_seed),
+                        initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed),
                         constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                     )
             elif self.initalization_method == 'normal':
                 c = tf.get_variable(   
                         name='c',
                         shape=(),
-                        initializer=tf.random_normal_initializer(mean=0, stddev=5, seed=random_seed),
+                        initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed),
                         constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                     )
 
@@ -326,8 +331,10 @@ class TensorHIP():
                                         }
                                     )
                 predictions.append(new_predictions)
-
-        return predictions
+        if self.scale_series is True:
+            return self.series_scaler.invert_transform_ys(predictions)
+        else:
+            return predictions
    
     def _fit(self, iteration_number, op='adam'):
         """
@@ -378,9 +385,10 @@ class TensorHIP():
 
             if self.scale_series is True:
                 xs = self.series_scaler.transform_xs(self.x)
+                ys = self.series_scaler.transform_ys(self.y)
             else:
                 xs = self.x
-            ys = self.y
+                ys = self.y
 
             for i in range(self.num_of_series):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
@@ -576,6 +584,7 @@ class TensorHIP():
             row = (int)(i / srows)
             col = (int)(i % srows)
             truth = self.y[i]
+
             pred = predictions[i]
             if display_plot:
                 if num_of_series == 1:

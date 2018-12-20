@@ -1,5 +1,27 @@
-import numpy as np
+import csv  
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+def load_data_from_csv(filename):
+    raw_data_df = pd.read_csv(filename)
+    # always assume that the last column in the CSV file is the target series
+    # and the rest are time-series data for the features
+    features, target = np.split(raw_data_df, [-1], axis=1) 
+    feature_names = list(features)
+    target_name = list(target)[0]
+    return features.values.T, target.values.T[0], feature_names, target_name
+
+def save_params_to_tsv(params, feature_name):
+    eta = params['eta']
+    mu = params['mu'][0][0]
+    c = params['c']
+    theta = params['theta']
+
+    with open('{}.tsv'.format(feature_name), 'w') as tsvfile:
+        writer = csv.writer(tsvfile, delimiter='\t')
+        writer.writerow(['eta', 'mu', 'c', 'theta'])
+        writer.writerow([eta, mu, c, theta])
 
 def plot_predictions(y_truth, y_predictions, xs=None, train_test_split_point=0.8, legend=True):
         """
