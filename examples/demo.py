@@ -16,11 +16,10 @@ if __name__ == '__main__':
     
     model = TensorHIP(
                       xs, ys,
-                      l1_param=1.0,
-                      num_initializations=3,
-                      feature_names=['random feature 1', 'random feature 2']
+                      feature_names=['random feature 1', 'random feature 2'],
                     )
     model.train()
+    
     print(model.get_model_parameters())
     print(model.get_test_rmse())
     print(model.get_weights_dict())
