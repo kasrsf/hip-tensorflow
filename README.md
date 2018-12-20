@@ -1,6 +1,7 @@
 # hip-tensorflow
-Hawkes Intensity Process Implemented in TensorFlow
+Hawkes Intensity Process Inspired by [Expecting to be HIP: Hawkes Intensity Processes for Social Media Popularity](https://arxiv.org/abs/1602.06033) Implemented in TensorFlow.
 
+![](images/formula.png)
 # Installation 
 Run the following snippet to install `hip` in a Mac/Unix environment.
 
@@ -17,6 +18,7 @@ python -c "import hip"
 
 # Usage
 
+### Single Feature Analysis
  To run the feature analysis with the hawkes model, run the following command:
  ```
  python hip_feature_analysis.py [input_dir] [feature_index]
@@ -29,8 +31,8 @@ the script will train the HIP model using all the csv files in `input_dir` with 
 ```
 > python hip_feature_analysis.py data/sample_data_2 2
 
->> eta  mu	c	theta
-0.20671242	1.3099899	1.1111233	13.408139
+eta    mu    c    theta
+0.20671242    1.3099899    1.1111233    13.408139
 ```
 
 # Requirements
