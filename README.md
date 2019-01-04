@@ -31,8 +31,8 @@ the script will train the HIP model using all the csv files in `input_dir` with 
 ```
 > python hip_feature_analysis.py data/sample_data_2 2
 
-eta    mu    c    theta
-0.20671242    1.3099899    1.1111233    13.408139
+eta    mu    theta
+0.20671242    1.3099899    13.408139
 ```
 
 # Requirements
