@@ -2,6 +2,7 @@ import logging
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 from tensorflow.python import debug as tf_debug
 
 
@@ -36,11 +37,11 @@ class TensorHIP():
                  l1_param=0.1,
                  l2_param=0,
                  learning_rate=0.5,
-                 num_initializations=5,
+                 num_initializations=3,
                  initalization_method='normal',
-                 max_iterations=1000,
+                 max_iterations=20,
                  params=None,
-                 fix_c_param_value=None,
+                 fix_c_param_value=0.5,
                  fix_theta_param_value=None,
                  fix_C_param_value=1.0,
                  scale_series=True,
@@ -50,7 +51,6 @@ class TensorHIP():
                 ):
         self.num_of_series = len(xs)
         self.x = np.asarray(xs)
-
         # store train-validation-test split points 
         self.train_split_size = train_split_size
         self.series_length = self.x[0].shape[1]
@@ -106,7 +106,6 @@ class TensorHIP():
         if scale_series is True:
             self.series_scaler = TimeSeriesScaler()
             self.x = self.series_scaler.transform_xs(self.x)
-
         self.feature_names = feature_names
 
         self.optimizer = optimizer
@@ -188,14 +187,11 @@ class TensorHIP():
         """ 
         best_validation_loss = self.validation_loss       
         for i in range(self.num_initializations):
-            
             self.print_log("== Initialization " + str(i + 1))
             loss_value, model_params = self._fit(iteration_number=i, op=self.optimizer)
-
             if loss_value < best_validation_loss:
                 best_validation_loss = loss_value
                 best_model_params = model_params
- 
         self.validation_loss = best_validation_loss
         self.model_params = best_model_params
 
@@ -213,7 +209,7 @@ class TensorHIP():
                 eta = tf.get_variable(
                                 name='eta',
                                 shape=(),
-                                initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed)
+                                initializer=tf.random_normal_initializer(mean=1, stddev=1, seed=random_seed)
                                 )
         
         if 'mu' in self.model_params:
@@ -223,13 +219,13 @@ class TensorHIP():
                 mu = tf.get_variable(
                                 name='mu',
                                 shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed)
+                                initializer=tf.random_uniform_initializer(-1, 1)
                                 )    
             elif self.initalization_method == 'normal':
                 mu = tf.get_variable(
                                 name='mu',
                                 shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed)
+                                initializer=tf.random_normal_initializer(mean=1, stddev=1)
                                 )
             
 
@@ -243,15 +239,15 @@ class TensorHIP():
                 theta = tf.get_variable(
                             name='theta',
                             shape=(),
-                            initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed),
+                            initializer=tf.random_uniform_initializer(-1, 1),
                             constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                             )  
             elif self.initalization_method == 'normal':
                 theta = tf.get_variable(
                             name='theta',
                             shape=(),
-                            initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed),
-                            constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
+                            initializer=tf.random_normal_initializer(mean=3, stddev=1),
+                            constraint=lambda x: tf.clip_by_value(x, 0.5, np.infty)
                             )  
 
         if 'C' in self.model_params:
@@ -264,14 +260,14 @@ class TensorHIP():
                 C = tf.get_variable(
                         name='C',
                         shape=(),
-                        initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed),
+                        initializer=tf.random_uniform_initializer(-1, 1),
                         constraint=lambda x: tf.clip_by_value(x, 0.01, np.infty)
                     )
             elif self.initalization_method == 'normal':
                 C = tf.get_variable(
                         name='C',
                         shape=(),
-                        initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed),
+                        initializer=tf.random_normal_initializer(mean=1, stddev=1),
                         constraint=lambda x: tf.clip_by_value(x, 0.01, np.infty)
                     )
         
@@ -285,14 +281,14 @@ class TensorHIP():
                 c = tf.get_variable(
                         name='c',
                         shape=(),
-                        initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed),
+                        initializer=tf.random_uniform_initializer(-1, 1),
                         constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                     )
             elif self.initalization_method == 'normal':
                 c = tf.get_variable(   
                         name='c',
                         shape=(),
-                        initializer=tf.random_normal_initializer(mean=0, stddev=1, seed=random_seed),
+                        initializer=tf.random_normal_initializer(mean=1, stddev=1),
                         constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
                     )
 
@@ -345,9 +341,6 @@ class TensorHIP():
         x_observed = tf.placeholder(tf.float32, name='x_observed')
         y_truth = tf.placeholder(tf.float32, name='y_truth')
 
-        # The model: 
-        # sum(mu[i], x_observed[i]) + C * (kernel_base + c ^ -(1 + theta))
-          
         # create params dictionary for easier management
         params_keys = ['eta', 'mu', 'theta', 'C', 'c']
         params = self._init_tf_model_variables(random_seed=RANDOM_SEED + iteration_number)
@@ -374,7 +367,7 @@ class TensorHIP():
                                                             )            
         
         grad = tf.gradients(loss, [mu, theta, C, c])
-        validation_loss = 0 
+        validation_loss_sum = 0 
         self.losses = []
         with tf.Session() as sess:
             tf.set_random_seed(RANDOM_SEED)
@@ -383,13 +376,13 @@ class TensorHIP():
             params_vals = sess.run([eta, mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
 
+            start_time = time.time()
+
+            xs = self.x 
             if self.scale_series is True:
-                xs = self.series_scaler.transform_xs(self.x)
                 ys = self.series_scaler.transform_ys(self.y)
             else:
-                xs = self.x
                 ys = self.y
-
             for i in range(self.num_of_series):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
                 x = xs[i]
@@ -513,18 +506,20 @@ class TensorHIP():
                                         }
                     )
 
-                validation_loss += sess.run(
+                validation_loss = sess.run(
                                             loss,
                                             feed_dict={
                                                         x_observed: validation_x,
                                                         y_truth: validation_y
                                                     }
                                         ) 
-
+                validation_loss_sum += validation_loss / self.num_of_series
+                
+            self.print_log('Minimaztion Done in {} Seconds'.format(time.time() - start_time))
             params_vals = sess.run([eta, mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
             
-        return validation_loss, fitted_model_params
+        return validation_loss_sum, fitted_model_params
     
     def get_model_parameters(self):
         """

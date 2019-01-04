@@ -15,11 +15,10 @@ def load_data_from_csv(filename):
 def print_params_to_tsv(params, feature_name):
     eta = params['eta']
     mu = params['mu'][0][0]
-    c = params['c']
     theta = params['theta']
 
-    param_names = ['eta', 'mu', 'c', 'theta']
-    param_values = [eta, mu, c, theta]
+    param_names = ['eta', 'mu', 'theta']
+    param_values = [eta, mu, theta]
 
     print('\t'.join([str(x) for x in param_names]))
     print('\t'.join([str(x) for x in param_values]))
@@ -96,7 +95,11 @@ class TimeSeriesScaler():
     def transform_x(self, x):
         x_min = np.min(x)
         x_max = np.max(x)
-        return (x - x_min) / (x_max - x_min)
+
+        if x_max > 0:
+            return (x - x_min) / (x_max - x_min)
+        else:
+            return x
 
     def transform_xs(self, xs):
         scaled_xs = []

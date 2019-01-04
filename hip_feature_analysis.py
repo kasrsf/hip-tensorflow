@@ -17,6 +17,7 @@ if __name__ == '__main__':
     input_files = []
     xs = []
     ys = []
+    file_paths = []
     for f in listdir(input_path):
         file_path = join(input_path, f)
         if isfile(file_path) and file_path.lower().endswith('.csv'):
@@ -25,11 +26,13 @@ if __name__ == '__main__':
 
             xs.append([features[feature_index]])
             ys.append(target)
+            file_paths.append(file_path)
+
     hip_model = TensorHIP(xs=xs,
                   ys=ys,    
                   feature_names=feature_names,
                   verbose=False)
     hip_model.train()    
 
-    model_params =  hip_model.get_model_parameters()
+    model_params = hip_model.get_model_parameters()
     print_params_to_tsv(params=model_params, feature_name=feature_names[feature_index])
