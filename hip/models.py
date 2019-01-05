@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 from tensorflow.python import debug as tf_debug
-
+from tqdm import tqdm
 
 from hip.utils import TimeSeriesScaler
 
@@ -186,10 +186,11 @@ class TensorHIP():
                 best loss value achieved among the iterations
         """ 
         best_validation_loss = self.validation_loss       
-        for i in range(self.num_initializations):
+        best_model_params = None
+        for i in tqdm(range(self.num_initializations)):
             self.print_log("== Initialization " + str(i + 1))
             loss_value, model_params = self._fit(iteration_number=i, op=self.optimizer)
-            if loss_value < best_validation_loss:
+            if loss_value < best_validation_loss or best_model_params == None:
                 best_validation_loss = loss_value
                 best_model_params = model_params
         self.validation_loss = best_validation_loss
@@ -383,7 +384,7 @@ class TensorHIP():
                 ys = self.series_scaler.transform_ys(self.y)
             else:
                 ys = self.y
-            for i in range(self.num_of_series):
+            for i in tqdm(range(self.num_of_series)):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
                 x = xs[i]
                 y = ys[i]
