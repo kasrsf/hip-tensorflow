@@ -33,7 +33,7 @@ class TensorHIP():
     def __init__(self, 
                  xs,
                  ys=None,
-                 train_split_size=0.8,
+                 train_split_size=0.95,
                  l1_param=0.1,
                  l2_param=0,
                  learning_rate=0.5,
@@ -41,6 +41,8 @@ class TensorHIP():
                  initalization_method='normal',
                  max_iterations=20,
                  params=None,
+                 eta_param_mode='random',
+                 fix_eta_param_value=0.1,
                  fix_c_param_value=0.5,
                  fix_theta_param_value=None,
                  fix_C_param_value=1.0,
@@ -55,7 +57,7 @@ class TensorHIP():
         self.train_split_size = train_split_size
         self.series_length = self.x[0].shape[1]
         self.num_train = int(self.series_length * train_split_size)
-        self.num_cv_train = int(self.num_train * train_split_size)
+        self.num_cv_train = int(self.num_train * 0.8)
         self.num_cv_test = self.num_train - self.num_cv_train
         self.num_test = self.series_length - self.num_train
 
@@ -68,7 +70,13 @@ class TensorHIP():
             self.y = np.zeros(self.x.shape[1])
         else:
             self.y = np.asarray(ys)
-    
+
+        self.scale_series = scale_series
+        if scale_series is True:
+            self.series_scaler = TimeSeriesScaler()
+            self.x = self.series_scaler.transform_xs(self.x)
+            self.ys = self.series_scaler.transform_ys(self.y)
+        
         # model parameters
         self.model_params = dict()
         self.fixed_c = False
@@ -83,6 +91,18 @@ class TensorHIP():
         if fix_C_param_value is not None:
             self.fixed_C = True
             self.model_params['C'] = fix_C_param_value
+        self.fixed_eta = False
+        if eta_param_mode != "random":
+            self.fixed_eta = True
+            if eta_param_mode == 'exo_mean':
+                self.model_params['eta'] = np.mean(self.x, dtype=np.float32)
+            elif eta_param_mode == 'target_mean':
+                self.model_params['eta'] = np.mean(self.ys, dtype=np.float32)
+            elif eta_param_mode == 'constant':
+                self.model_params['eta'] = fix_eta_param_value
+            else:
+                self.print_log("Invalid eta initialization mode. reverting to random.")
+                self.fixed_eta = False
 
         if params is not None:
             self.model_params['eta'] = params['eta']
@@ -102,10 +122,6 @@ class TensorHIP():
         if verbose is True:
             logging.basicConfig(level=logging.INFO)
 
-        self.scale_series = scale_series
-        if scale_series is True:
-            self.series_scaler = TimeSeriesScaler()
-            self.x = self.series_scaler.transform_xs(self.x)
         self.feature_names = feature_names
 
         self.optimizer = optimizer
@@ -197,22 +213,6 @@ class TensorHIP():
         self.model_params = best_model_params
 
     def _init_tf_model_variables(self, random_seed=RANDOM_SEED):
-        if 'eta' in self.model_params:
-            eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                        
-        else:
-            if self.initalization_method == 'uniform':
-                eta = tf.get_variable(
-                                name='eta',
-                                shape=(),
-                                initializer=tf.random_uniform_initializer(0, 1, seed=random_seed)
-                                )
-            elif self.initalization_method == 'normal':
-                eta = tf.get_variable(
-                                name='eta',
-                                shape=(),
-                                initializer=tf.random_normal_initializer(mean=1, stddev=1, seed=random_seed)
-                                )
-        
         if 'mu' in self.model_params:
             mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
         else:
@@ -220,15 +220,33 @@ class TensorHIP():
                 mu = tf.get_variable(
                                 name='mu',
                                 shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_uniform_initializer(-1, 1)
+                                initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed)
                                 )    
             elif self.initalization_method == 'normal':
                 mu = tf.get_variable(
                                 name='mu',
                                 shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_normal_initializer(mean=1, stddev=1)
+                                initializer=tf.random_normal_initializer(mean=1, stddev=1, seed=random_seed)
                                 )
             
+        if 'eta' in self.model_params:
+            if self.fixed_eta is True:
+                eta = tf.constant(self.model_params['eta'])
+            else:
+                eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                                               
+        else:
+            if self.initalization_method == 'uniform':
+                eta = tf.get_variable(
+                                name='eta',
+                                shape=(),
+                                initializer=tf.random_uniform_initializer(0, 1)
+                                )
+            elif self.initalization_method == 'normal':
+                eta = tf.get_variable(
+                                name='eta',
+                                shape=(),
+                                initializer=tf.random_normal_initializer(mean=1, stddev=1)
+                                )
 
         if 'theta' in self.model_params:
             if self.fixed_theta is True:
@@ -380,10 +398,8 @@ class TensorHIP():
             start_time = time.time()
 
             xs = self.x 
-            if self.scale_series is True:
-                ys = self.series_scaler.transform_ys(self.y)
-            else:
-                ys = self.y
+            ys = self.ys
+            
             for i in tqdm(range(self.num_of_series)):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
                 x = xs[i]

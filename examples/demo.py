@@ -17,6 +17,8 @@ if __name__ == '__main__':
     model = TensorHIP(
                       xs, ys,
                       feature_names=['random feature 1', 'random feature 2'],
+                      eta_param_mode="constant",
+                      fix_eta_param_value=0.5
                     )
     model.train()
     

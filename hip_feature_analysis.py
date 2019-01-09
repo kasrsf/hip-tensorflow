@@ -37,11 +37,34 @@ if __name__ == '__main__':
 
     start_time = time.time()
 
-    hip_model = TensorHIP(xs=xs,
-                  ys=ys,    
+    # eta default random initialization
+    hip_model = TensorHIP(xs=xs, ys=ys,    
                   feature_names=feature_names,
                   num_initializations=1,
                   verbose=False)
+
+    # eta fixed to the average value of exogenous signal
+    # hip_model = TensorHIP(xs=xs, ys=ys,    
+    #               eta_param_mode='exo_mean',
+    #               feature_names=feature_names,
+    #               num_initializations=1,
+    #               verbose=False)                  
+
+    # eta fixed to the average value of target signal
+    # hip_model = TensorHIP(xs=xs, ys=ys,    
+    #               eta_param_mode='target_mean',
+    #               feature_names=feature_names,
+    #               num_initializations=1,
+    #               verbose=False)
+
+    # eta fixed to the average value of target signal
+    # hip_model = TensorHIP(xs=xs, ys=ys,    
+    #               eta_param_mode='constant',
+    #               fix_eta_param_value=0.1,
+    #               feature_names=feature_names,
+    #               num_initializations=1,
+    #               verbose=False)
+
     hip_model.train()    
 
     sys.stderr.write("training completed in {} seconds\n".format(time.time() - start_time))
