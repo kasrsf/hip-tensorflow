@@ -17,10 +17,10 @@ def print_params_to_tsv(params, feature_name):
     mu = params['mu'][0][0]
     theta = params['theta']
 
-    param_names = ['eta', 'mu', 'theta']
-    param_values = [eta, mu, theta]
+    param_names = ['feature_name','eta', 'mu', 'theta']
+    param_values = [feature_name,eta, mu, theta]
 
-    print('\t'.join([str(x) for x in param_names]))
+    #print('\t'.join([str(x) for x in param_names]))
     print('\t'.join([str(x) for x in param_values]))
 
 def plot_predictions(y_truth, y_predictions, xs=None, train_test_split_point=0.8, legend=True):
