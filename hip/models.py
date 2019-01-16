@@ -1,7 +1,8 @@
 import logging
 import tensorflow as tf
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import time
 from tensorflow.python import debug as tf_debug
 from tqdm import tqdm
@@ -123,7 +124,6 @@ class TensorHIP():
             logging.basicConfig(level=logging.INFO)
 
         self.feature_names = feature_names
-
         self.optimizer = optimizer
 
     def print_log(self, msg):    
@@ -571,9 +571,16 @@ class TensorHIP():
 
     def get_weights_dict(self):
         if self.feature_names != None:
-            return dict(zip(self.feature_names, list(self.model_params['mu'][0])))
+            ret_val = dict(zip(self.feature_names, list(self.model_params['mu'][0])))
+        else:
+            ret_val = list(self.model_params['mu'][0])
 
-        return list(self.model_params['mu'][0])
+        return ret_val
+
+    def get_params_df(self):
+        params_df = pd.DataFrame([{'eta': self.model_params['eta'], 'theta': self.model_params['theta']}])
+        mu_df = pd.DataFrame([self.get_weights_dict()])
+        return pd.concat([params_df, mu_df], axis=1)
 
     def plot(self, ax=None):
         predictions = self.get_predictions()

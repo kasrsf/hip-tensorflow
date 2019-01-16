@@ -10,13 +10,12 @@ from hip.utils import load_data_from_csv, print_params_to_tsv
 if __name__ == '__main__':
     sys.stderr.write("loading the files\n")
     sys.stderr.flush()
-
-    if len(sys.argv) > 1:
+    
+    if len(sys.argv) == 3:
         input_path = sys.argv[1]
         feature_index = int(sys.argv[2])
     else:
-        input_path = 'data/sample_data_2/'
-        feature_index = 0 
+        raise SyntaxError("Insufficient arguments")
 
     input_files = []
     xs = []
@@ -27,11 +26,11 @@ if __name__ == '__main__':
         if isfile(file_path) and file_path.lower().endswith('.csv'):
             input_files.append(file_path)
             features, target, feature_names, target_name = load_data_from_csv(file_path)
-
             xs.append([features[feature_index]])
+            input_feature_names = [feature_names[feature_index]]
             ys.append(target)
             file_paths.append(file_path)
-
+    
     sys.stderr.write("beginning the training\n")
     sys.stderr.flush()
 
@@ -39,7 +38,7 @@ if __name__ == '__main__':
 
     # eta default random initialization
     hip_model = TensorHIP(xs=xs, ys=ys,    
-                  feature_names=feature_names,
+                  feature_names=input_feature_names,
                   num_initializations=1,
                   verbose=False)
 
@@ -64,10 +63,9 @@ if __name__ == '__main__':
     #               feature_names=feature_names,
     #               num_initializations=1,
     #               verbose=False)
-
     hip_model.train()    
 
-    sys.stderr.write("training completed in {} seconds\n".format(time.time() - start_time))
+    sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
 
     model_params = hip_model.get_model_parameters()
     print_params_to_tsv(params=model_params, feature_name=feature_names[feature_index])
