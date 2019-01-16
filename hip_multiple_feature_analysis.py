@@ -36,11 +36,10 @@ if __name__ == '__main__':
     # eta default random initialization
     hip_model = TensorHIP(xs=xs, ys=ys,    
                             feature_names=input_feature_names,
-                            l1_param=0.1,
-                            l2_param=0,
+                            l1_param=0, l2_param=0,
                             verbose=False)
     hip_model.train()    
     sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
     sys.stderr.flush()
     
-    print(hip_model.get_params_df().to_csv(sep='\t'))
+    print(hip_model.get_params_df().to_csv(sep='\t', index=False))
