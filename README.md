@@ -21,7 +21,7 @@ python -c "import hip"
 ### Single Feature Analysis
  To run the feature analysis with the hawkes model, run the following command:
  ```
- python hip_feature_analysis.py [input_dir] [feature_index]
+ python hip_single_feature_analysis.py [input_dir] [feature_index]
  ```
 
 the script will train the HIP model using all the csv files in `input_dir` with a single exogenous source `feature_index` and output a tab-seperated table containing the learned values.
@@ -29,7 +29,7 @@ the script will train the HIP model using all the csv files in `input_dir` with 
 # Example
 
 ```
-> python hip_feature_analysis.py data/sample_data_2 2
+> python hip_single_feature_analysis.py data/sample_data_2 2
 
 eta    mu    theta
 0.20671242    1.3099899    13.408139

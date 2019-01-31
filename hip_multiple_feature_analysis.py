@@ -36,10 +36,69 @@ if __name__ == '__main__':
     # eta default random initialization
     hip_model = TensorHIP(xs=xs, ys=ys,    
                             feature_names=input_feature_names,
-                            l1_param=0, l2_param=0,
+                            l1_param=0, l2_param=0, num_initializations=5,
                             verbose=False)
     hip_model.train()    
     sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
     sys.stderr.flush()
     
-    print(hip_model.get_params_df().to_csv(sep='\t', index=False))
+    hip_model.get_params_df().to_csv('res_no_reg.tsv',sep='\t', index=False)
+
+    sys.stderr.write("beginning the training\n")
+    sys.stderr.flush()
+    start_time = time.time()
+    # eta default random initialization
+    hip_model = TensorHIP(xs=xs, ys=ys,    
+                            feature_names=input_feature_names,
+                            l1_param=0.1, l2_param=0, num_initializations=5,
+                            verbose=False)
+    hip_model.train()    
+    sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
+    sys.stderr.flush()
+
+    hip_model.get_params_df().to_csv('res_l1_1_reg.tsv',sep='\t', index=False)
+    
+    sys.stderr.write("beginning the training\n")
+    sys.stderr.flush()
+    start_time = time.time()
+    # eta default random initialization
+    hip_model = TensorHIP(xs=xs, ys=ys,    
+                            feature_names=input_feature_names,
+                            l1_param=0.5, l2_param=0, num_initializations=5,
+                            verbose=False)
+    hip_model.train()    
+    sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
+    sys.stderr.flush()
+
+    hip_model.get_params_df().to_csv('res_l1_5_reg.tsv',sep='\t', index=False)
+
+    sys.stderr.write("beginning the training\n")
+    sys.stderr.flush()
+    start_time = time.time()
+    # eta default random initialization
+    hip_model = TensorHIP(xs=xs, ys=ys,    
+                            feature_names=input_feature_names,
+                            l1_param=0, l2_param=0.1, num_initializations=5,
+                            verbose=False)
+    hip_model.train()    
+    sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
+    sys.stderr.flush()
+
+    hip_model.get_params_df().to_csv('res_l2_1_reg.tsv',sep='\t', index=False)
+    
+    sys.stderr.write("beginning the training\n")
+    sys.stderr.flush()
+    start_time = time.time()
+    # eta default random initialization
+    hip_model = TensorHIP(xs=xs, ys=ys,    
+                            feature_names=input_feature_names,
+                            l1_param=0, l2_param=0.5, num_initializations=5,
+                            verbose=False)
+    hip_model.train()    
+    sys.stderr.write("\ntraining completed in {} seconds\n".format(time.time() - start_time))
+    sys.stderr.flush()
+
+    hip_model.get_params_df().to_csv('res_l2_5_reg.tsv',sep='\t', index=False)
+
+     
+    

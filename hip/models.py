@@ -87,7 +87,7 @@ class TensorHIP():
         self.fixed_theta = False
         if fix_theta_param_value is not None:
             self.fixed_theta = True
-            self.model_params['theta'] = fix_theta_param_value
+            self.model_params['theta'] = (float)(fix_theta_param_value)
         self.fixed_C = False
         if fix_C_param_value is not None:
             self.fixed_C = True
