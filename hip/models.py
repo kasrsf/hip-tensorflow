@@ -19,17 +19,6 @@ class TensorHIP():
         Hawkes Intensity Process Model Implemented and Optimized in TensorFlow
         Used for prediction of time series using the Hawkes Self-Excitation 
         model with one or more exogenous sources of influence
-
-        Parameters
-        -----------
-        x
-            a list of the time-series for possible sources of influence in 
-            predicting the target series
-        y
-            target time series
-        num_train
-
-        num_test:
     """
     def __init__(self, 
                  xs,
@@ -186,20 +175,6 @@ class TensorHIP():
         """
             Fit the best HIP model using multiple random restarts by
             minimizing the loss value of the model 
-            
-            Parameters
-            ----------
-            num_iterations
-                number of random restarts for fitting the model
-            op 
-                choice of the optimzier ('adagrad', 'adam')
-            verbose 
-                print logs
-
-            Returns
-            -------
-            best_loss
-                best loss value achieved among the iterations
         """ 
         best_validation_loss = self.validation_loss       
         best_model_params = None

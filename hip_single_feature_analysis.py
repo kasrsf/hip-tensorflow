@@ -31,7 +31,6 @@ if __name__ == '__main__':
             input_feature_names = [feature_names[feature_index]]
             ys.append(target)
             file_paths.append(file_path)
-
     sys.stderr.write("beginning the training\n")
     sys.stderr.flush()
 
