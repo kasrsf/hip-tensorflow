@@ -24,16 +24,16 @@ class TensorHIP():
                  xs,
                  ys=None,
                  train_split_size=0.95,
-                 l1_param=0.1,
+                 l1_param=0,
                  l2_param=0,
                  learning_rate=0.5,
-                 num_initializations=3,
+                 num_initializations=5,
                  initalization_method='normal',
-                 max_iterations=20,
+                 max_iterations=100,
                  params=None,
                  eta_param_mode='random',
-                 fix_eta_param_value=0.1,
-                 fix_c_param_value=0.5,
+                 fix_eta_param_value=None,#0.1,
+                 fix_c_param_value=None,#0.5,
                  fix_theta_param_value=None,
                  fix_C_param_value=1.0,
                  scale_series=True,
@@ -42,7 +42,7 @@ class TensorHIP():
                  feature_names=None
                 ):
         self.num_of_series = len(xs)
-        self.x = np.asarray(xs)
+        self.x = np.asarray(xs).astype(float)
         # store train-validation-test split points 
         self.train_split_size = train_split_size
         self.series_length = self.x[0].shape[1]
@@ -57,10 +57,9 @@ class TensorHIP():
 
         if ys is None:
             # assume that xs is also 1d
-            self.y = np.zeros(self.x.shape[1])
+            self.y = np.zeros(self.x.shape[1]).astype(float)
         else:
-            self.y = np.asarray(ys)
-
+            self.y = np.asarray(ys).astype(float)
         self.scale_series = scale_series
         if scale_series is True:
             self.series_scaler = TimeSeriesScaler()
@@ -178,7 +177,7 @@ class TensorHIP():
         """ 
         best_validation_loss = self.validation_loss       
         best_model_params = None
-        for i in tqdm(range(self.num_initializations)):
+        for i in range(self.num_initializations):
             self.print_log("== Initialization " + str(i + 1))
             loss_value, model_params = self._fit(iteration_number=i, op=self.optimizer)
             if loss_value < best_validation_loss or best_model_params == None:
@@ -375,7 +374,7 @@ class TensorHIP():
             xs = self.x 
             ys = self.ys
             
-            for i in tqdm(range(self.num_of_series)):
+            for i in range(self.num_of_series):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
                 x = xs[i]
                 y = ys[i]
@@ -554,7 +553,7 @@ class TensorHIP():
 
     def get_params_df(self):
         params_df = pd.DataFrame([{'eta': self.model_params['eta'], 'theta': self.model_params['theta']}])
-        mu_df = pd.DataFrame([self.get_weights_dict()])
+        mu_df = pd.DataFrame([self.get_weights_dict()], columns=['mu'])
         return pd.concat([params_df, mu_df], axis=1)
 
     def plot(self, ax=None):
@@ -586,7 +585,7 @@ class TensorHIP():
                 else:
                     ax = axes[row, col]
             ax.axvline(data_test_split_point, color='k')
-            ax.plot(np.arange(data_length), truth, 'k--', label='Observed #views')
+            ax.plot(np.arange(data_length - 1), truth[:-1], 'k--', label='Observed #views')
 
             # plot predictions on training data with a different alpha to make the plot more clear            
             ax.plot(
@@ -597,12 +596,14 @@ class TensorHIP():
                         label='Model Fit'
                     )
             ax.plot(
-                        np.arange(data_test_split_point, data_length),
-                        pred[data_test_split_point:], 
+                        np.arange(data_test_split_point, data_length-1),
+                        pred[data_test_split_point:-1], 
                         'b-',
                         alpha=1,
                         label='Model Predictions'
                     )
-        
+        ax.legend()
+        ax.set_xlabel("Day")
+        ax.set_ylabel("Occurances")
         if display_plot is True:
             plt.show()
