@@ -35,36 +35,47 @@ class TensorHIP():
                  fix_eta_param_value=None,#0.1,
                  fix_c_param_value=None,#0.5,
                  fix_theta_param_value=None,
-                 fix_C_param_value=1.0,
+                 fix_C_param_value=None,#1.0,
                  scale_series=True,
                  verbose=False,
                  optimizer='l-bfgs',
                  feature_names=None
                 ):
-        self.num_of_series = len(xs)
+        self.num_of_series = len(ys)
         self.x = np.asarray(xs).astype(float)
         # store train-validation-test split points 
         self.train_split_size = train_split_size
-        self.series_length = self.x[0].shape[1]
-        self.num_train = int(self.series_length * train_split_size)
-        self.num_cv_train = int(self.num_train * 0.8)
-        self.num_cv_test = self.num_train - self.num_cv_train
-        self.num_test = self.series_length - self.num_train
-
-        self.num_of_exogenous_series = self.x[0].shape[0]
-        
-        self.validation_loss = np.inf
-
+                
         if ys is None:
             # assume that xs is also 1d
             self.y = np.zeros(self.x.shape[1]).astype(float)
         else:
             self.y = np.asarray(ys).astype(float)
+            
+        if len(self.x) > 0:
+            self.num_of_exogenous_series = self.x[0].shape[0]            
+        else:
+            # since we don't have any exogenous info
+            # instead of modifying the training module to behave differently
+            # define the exogenous data as a vector of zeros with appropriate shape
+            self.x = np.asarray([np.zeros_like(self.y)])
+            self.num_of_exogenous_series = 0
+        self.series_length = self.y[0].shape[0]
+
+        self.num_train = int(self.series_length * train_split_size)
+        self.num_cv_train = int(self.num_train * 0.8)
+        self.num_cv_test = self.num_train - self.num_cv_train
+        self.num_test = self.series_length - self.num_train
+        
+        self.validation_loss = np.inf
+
         self.scale_series = scale_series
         if scale_series is True:
             self.series_scaler = TimeSeriesScaler()
             self.x = self.series_scaler.transform_xs(self.x)
             self.ys = self.series_scaler.transform_ys(self.y)
+        else:
+            self.ys = self.y
         
         # model parameters
         self.model_params = dict()
@@ -149,13 +160,15 @@ class TensorHIP():
         train_size = tf.shape(x)[1]
         bias = model_params['eta']
         def loop_body(i, x, pred_history):
-            exogenous = tf.reduce_sum(tf.multiply(model_params['mu'], x[:, i]))
+            # exogenous = tf.reduce_sum(tf.multiply(model_params['mu'], x[:, i]))
             endogenous = model_params['C'] * tf.reduce_sum(
                                                             pred_history *
-                                                            tf.pow(self.time_decay_base(tf.shape(pred_history)[0]) + tf.maximum(0.0, model_params['c']), 
+                                                            tf.pow(self.time_decay_base(tf.shape(pred_history)[0]),# + tf.maximum(0.0, model_params['c']), 
                                                                 tf.tile([-1 - model_params['theta']], [tf.shape(pred_history)[0]]))
                                                         )
-            new_prediction = tf.add_n([bias, exogenous, endogenous]) 
+            new_prediction = tf.add_n([bias
+                                       #, exogenous
+                                       ,endogenous]) 
             pred_history = tf.concat([pred_history, [new_prediction]], axis=0)
             i = tf.add(i, 1)
             return [i, x, pred_history]
@@ -344,6 +357,7 @@ class TensorHIP():
         c = params['c']
 
         pred = self.predict(x_observed, params)
+
         loss = (
                 tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred))) + 
                 self.l1_param * (tf.reduce_sum(tf.abs(mu)) + tf.abs(C)) + 
@@ -372,18 +386,15 @@ class TensorHIP():
             start_time = time.time()
 
             xs = self.x 
-            ys = self.ys
-            
+            ys = self.ys            
             for i in range(self.num_of_series):
                 self.print_log("--- Fitting target series #{}".format(i + 1))
                 x = xs[i]
                 y = ys[i]
-                
                 test_split = int(len(y) * self.train_split_size)
                 validation_split = int(test_split * self.train_split_size)
                 train_x, train_y = x[:, :self.num_cv_train], y[:self.num_cv_train]
                 validation_x, validation_y = x[:, self.num_cv_train:self.num_train], y[self.num_cv_train:self.num_train]
-                    
                 if op == 'adam':
                     observed_eta, observed_mu, observed_theta, observed_C, observed_c = sess.run([[eta], [mu], [theta], [C], [c]])
                     new_predictions = sess.run(
@@ -488,7 +499,7 @@ class TensorHIP():
                             break
                         
                         iteration_counter += 1
-                elif op == 'l-bfgs':
+                elif op == 'l-bfgs':                    
                     optimizer.minimize(
                                         session=sess,
                                         feed_dict={
@@ -571,7 +582,7 @@ class TensorHIP():
             display_plot = True
             fig, axes = plt.subplots(srows, srows, sharex='all')
             fig.set_figheight(10)
-            fig.set_figwidth(10)
+            fig.set_figwidth(20)
 
         for i in range(num_of_series):
             row = (int)(i / srows)
@@ -603,7 +614,8 @@ class TensorHIP():
                         label='Model Predictions'
                     )
         ax.legend()
-        ax.set_xlabel("Day")
-        ax.set_ylabel("Occurances")
+        # ax.set_xlabel("Day")
+        # ax.set_ylabel("Occurances")
         if display_plot is True:
             plt.show()
+            
