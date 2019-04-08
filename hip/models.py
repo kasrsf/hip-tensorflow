@@ -3,17 +3,15 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import time
 from tensorflow.python import debug as tf_debug
 from tqdm import tqdm
 
 from hip.utils import TimeSeriesScaler
 
-# stop the optimization process after doing a certain number of iterations
-TOL_PARAM, TOL_LOSS, TOL_GRAD = 1e-4, 1e-4, 1e-4
-PRINT_ITERATION_CHECKPOINT_STEPS = 100
-
 RANDOM_SEED = 42
+# select the past MEMORY_WINDOW values of prediction when 
+# calculating the endogenous influence
+MEMORY_WINDOW = 7
 class TensorHIP():
     """
         Hawkes Intensity Process Model Implemented and Optimized in TensorFlow
@@ -28,9 +26,7 @@ class TensorHIP():
                  l2_param=0,
                  learning_rate=0.5,
                  num_initializations=5,
-                 initalization_method='normal',
                  max_iterations=100,
-                 params=None,
                  eta_param_mode='random',
                  fix_eta_param_value=None,#0.1,
                  fix_c_param_value=None,#0.5,
@@ -40,7 +36,7 @@ class TensorHIP():
                  verbose=False,
                  optimizer='l-bfgs',
                  feature_names=None
-                ):
+        ):
         self.num_of_series = len(ys)
         self.x = np.asarray(xs).astype(float)
         # store train-validation-test split points 
@@ -103,20 +99,12 @@ class TensorHIP():
             else:
                 self.print_log("Invalid eta initialization mode. reverting to random.")
                 self.fixed_eta = False
-
-        if params is not None:
-            self.model_params['eta'] = params['eta']
-            self.model_params['mu'] = params['mu']
-            self.model_params['theta'] = params['theta']
-            self.model_params['C'] = params['C']
-            self.model_params['c'] = params['c']
-
+                
         self.l1_param = l1_param
         self.l2_param = l2_param
         self.learning_rate = learning_rate
         self.max_iterations = max_iterations
         self.num_initializations = num_initializations
-        self.initalization_method = initalization_method
 
         self.verbose = verbose
         if verbose is True:
@@ -138,7 +126,10 @@ class TensorHIP():
             i
                 time series length
         """
-        return tf.cast(tf.range(i, 0, -1), tf.float32)
+        return tf.cast(tf.range(i+1, 1, -1), tf.float32)
+    # TODO: NOTE: IF we set range to end at 1, the endogenous effect becomes exponential since we are always adding the last effect
+    # To ways to mitigate. add an offset var c, which given the nonconvexicity of the optimization task, makes training harder
+    # or 
 
     def predict(self, x, model_params=None):
         """
@@ -160,15 +151,18 @@ class TensorHIP():
         train_size = tf.shape(x)[1]
         bias = model_params['eta']
         def loop_body(i, x, pred_history):
-            # exogenous = tf.reduce_sum(tf.multiply(model_params['mu'], x[:, i]))
-            endogenous = model_params['C'] * tf.reduce_sum(
-                                                            pred_history *
-                                                            tf.pow(self.time_decay_base(tf.shape(pred_history)[0]),# + tf.maximum(0.0, model_params['c']), 
-                                                                tf.tile([-1 - model_params['theta']], [tf.shape(pred_history)[0]]))
+            exogenous = tf.reduce_sum(tf.multiply(model_params['mu'], x[:, i]))
+            
+            endo_history_window_start = tf.maximum(0, i - MEMORY_WINDOW)
+            endo_history = pred_history[endo_history_window_start:]
+            endogenous = model_params['C'] * tf.reduce_sum(endo_history *
+                                                           tf.pow(self.time_decay_base(i - endo_history_window_start) + tf.constant(0.01),#, model_params['c']), 
+                                                                tf.tile([-1 - model_params['theta']], [i - endo_history_window_start]))
                                                         )
+            tf.Print(endo_history_window_start, [endo_history_window_start])
             new_prediction = tf.add_n([bias
-                                       #, exogenous
-                                       ,endogenous]) 
+                                       , exogenous
+                                       , endogenous]) 
             pred_history = tf.concat([pred_history, [new_prediction]], axis=0)
             i = tf.add(i, 1)
             return [i, x, pred_history]
@@ -192,153 +186,14 @@ class TensorHIP():
         best_model_params = None
         for i in range(self.num_initializations):
             self.print_log("== Initialization " + str(i + 1))
-            loss_value, model_params = self._fit(iteration_number=i, op=self.optimizer)
+            loss_value, model_params = self._fit(iteration_number=i)
             if loss_value < best_validation_loss or best_model_params == None:
                 best_validation_loss = loss_value
                 best_model_params = model_params
         self.validation_loss = best_validation_loss
         self.model_params = best_model_params
-
-    def _init_tf_model_variables(self, random_seed=RANDOM_SEED):
-        if 'mu' in self.model_params:
-            mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
-        else:
-            if self.initalization_method == 'uniform':
-                mu = tf.get_variable(
-                                name='mu',
-                                shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_uniform_initializer(-1, 1, seed=random_seed)
-                                )    
-            elif self.initalization_method == 'normal':
-                mu = tf.get_variable(
-                                name='mu',
-                                shape=(1, self.num_of_exogenous_series),
-                                initializer=tf.random_normal_initializer(mean=1, stddev=1, seed=random_seed)
-                                )
-            
-        if 'eta' in self.model_params:
-            if self.fixed_eta is True:
-                eta = tf.constant(self.model_params['eta'])
-            else:
-                eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                                               
-        else:
-            if self.initalization_method == 'uniform':
-                eta = tf.get_variable(
-                                name='eta',
-                                shape=(),
-                                initializer=tf.random_uniform_initializer(0, 1)
-                                )
-            elif self.initalization_method == 'normal':
-                eta = tf.get_variable(
-                                name='eta',
-                                shape=(),
-                                initializer=tf.random_normal_initializer(mean=1, stddev=1)
-                                )
-
-        if 'theta' in self.model_params:
-            if self.fixed_theta is True:
-                theta = tf.constant(self.model_params['theta'])
-            else:
-                theta = tf.get_variable('theta', initializer=tf.constant(self.model_params['theta']))  
-        else:
-            if self.initalization_method == 'uniform':
-                theta = tf.get_variable(
-                            name='theta',
-                            shape=(),
-                            initializer=tf.random_uniform_initializer(-1, 1),
-                            constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
-                            )  
-            elif self.initalization_method == 'normal':
-                theta = tf.get_variable(
-                            name='theta',
-                            shape=(),
-                            initializer=tf.random_normal_initializer(mean=3, stddev=1),
-                            constraint=lambda x: tf.clip_by_value(x, 0.5, np.infty)
-                            )  
-
-        if 'C' in self.model_params:
-            if self.fixed_C is True:
-                C = tf.constant(self.model_params['C'])
-            else:
-                C = tf.get_variable('C', initializer=tf.constant(self.model_params['C']))
-        else:
-            if self.initalization_method == 'uniform':
-                C = tf.get_variable(
-                        name='C',
-                        shape=(),
-                        initializer=tf.random_uniform_initializer(-1, 1),
-                        constraint=lambda x: tf.clip_by_value(x, 0.01, np.infty)
-                    )
-            elif self.initalization_method == 'normal':
-                C = tf.get_variable(
-                        name='C',
-                        shape=(),
-                        initializer=tf.random_normal_initializer(mean=1, stddev=1),
-                        constraint=lambda x: tf.clip_by_value(x, 0.01, np.infty)
-                    )
         
-        if 'c' in self.model_params:
-            if self.fixed_c is True:
-                c = tf.constant(self.model_params['c'])
-            else:
-                c = tf.get_variable('c', initializer=tf.constant(self.model_params['c']))
-        else:
-            if self.initalization_method == 'uniform':
-                c = tf.get_variable(
-                        name='c',
-                        shape=(),
-                        initializer=tf.random_uniform_initializer(-1, 1),
-                        constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
-                    )
-            elif self.initalization_method == 'normal':
-                c = tf.get_variable(   
-                        name='c',
-                        shape=(),
-                        initializer=tf.random_normal_initializer(mean=1, stddev=1),
-                        constraint=lambda x: tf.clip_by_value(x, 0, np.infty)
-                    )
-
-        return {
-                'eta': eta,
-                'mu': mu, 
-                'theta': theta, 
-                'C': C, 
-                'c': c
-        }
-
-    def get_predictions(self):
-        # predict future values for the test data
-
-        # Instantiate a new model with the trained parameters
-        tf.reset_default_graph()
-        x_observed = tf.placeholder(tf.float32, name='x_observed')
-
-        self._init_tf_model_variables()
-        
-        pred = self.predict(x_observed)
-        predictions = []
-
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-
-            for i in range(self.num_of_series):    
-                if self.scale_series is True:
-                    x = self.series_scaler.transform_x(self.x[i])
-                else:
-                    x = self.x[i]
-                new_predictions = sess.run(
-                                        pred, 
-                                        feed_dict={
-                                            x_observed: x
-                                        }
-                                    )
-                predictions.append(new_predictions)
-        if self.scale_series is True:
-            return self.series_scaler.invert_transform_ys(predictions)
-        else:
-            return predictions
-   
-    def _fit(self, iteration_number, op='adam'):
+    def _fit(self, iteration_number):
         """
             Internal method for fitting the model at each iteration of the
             training process
@@ -355,25 +210,19 @@ class TensorHIP():
         theta = params['theta']
         C = params['C']
         c = params['c']
-
         pred = self.predict(x_observed, params)
-
         loss = (
-                tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred))) + 
-                self.l1_param * (tf.reduce_sum(tf.abs(mu)) + tf.abs(C)) + 
-                self.l2_param * (tf.reduce_sum(tf.square(mu)) + tf.square(C))
-               ) 
+            tf.sqrt(tf.reduce_sum(tf.square(y_truth - pred))) + 
+            self.l1_param * (tf.reduce_sum(tf.abs(mu))) + 
+            self.l2_param * (tf.reduce_sum(tf.square(mu)))
+        ) 
         previous_loss = np.inf
-        if op == 'adam':
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)        
-            train_op = optimizer.minimize(loss)
-        elif op == 'l-bfgs':
-            optimizer = tf.contrib.opt.ScipyOptimizerInterface(loss, 
-                                                               method='L-BFGS-B',
-                                                               options={'maxiter': self.max_iterations}
-                                                            )            
+        optimizer = tf.contrib.opt.ScipyOptimizerInterface(
+                                                            loss, 
+                                                            method='L-BFGS-B',
+                                                            options={'maxiter': self.max_iterations}
+                                                        )            
         
-        grad = tf.gradients(loss, [mu, theta, C, c])
         validation_loss_sum = 0 
         self.losses = []
         with tf.Session() as sess:
@@ -382,9 +231,6 @@ class TensorHIP():
             
             params_vals = sess.run([eta, mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
-
-            start_time = time.time()
-
             xs = self.x 
             ys = self.ys            
             for i in range(self.num_of_series):
@@ -395,118 +241,21 @@ class TensorHIP():
                 validation_split = int(test_split * self.train_split_size)
                 train_x, train_y = x[:, :self.num_cv_train], y[:self.num_cv_train]
                 validation_x, validation_y = x[:, self.num_cv_train:self.num_train], y[self.num_cv_train:self.num_train]
-                if op == 'adam':
-                    observed_eta, observed_mu, observed_theta, observed_C, observed_c = sess.run([[eta], [mu], [theta], [C], [c]])
-                    new_predictions = sess.run(
-                                            pred, 
-                                            feed_dict={
-                                                x_observed: x
-                                            }
-                                        )
-                    
-                    observed_loss = sess.run(
-                                            [loss],
-                                            feed_dict={
-                                                        y_truth: train_y,
-                                                        x_observed: train_x
-                                                    }
-                                            )
-                    observed_grad = sess.run(
-                                            [grad],
-                                            feed_dict={
-                                                        y_truth: train_y,
-                                                        x_observed: train_x
-                                                    }
-                                            )
-
-                    self.print_log(' iter | eta | mu | theta | C | c | validation loss ')
-                    
-                    iteration_counter = 1
-                    while iteration_counter < self.max_iterations: 
-                        # gradient step                         
-                        sess.run(
-                                train_op, 
-                                feed_dict={
+                print(fitted_model_params)
+                new_predictions = sess.run(
+                                        pred, 
+                                        feed_dict={
+                                            x_observed: train_x
+                                        }
+                                    )
+                print(new_predictions)
+                
+                optimizer.minimize(session=sess,
+                                   feed_dict={
                                         x_observed: train_x,
                                         y_truth: train_y
                                     }
-                                )   
-                        
-                        # get new parameters
-                        curr_eta, curr_mu, curr_theta, curr_C, curr_c = sess.run([eta, mu, theta, C, c]) 
-                        param_diffs= np.subtract([curr_mu, curr_eta, curr_theta, curr_C, curr_c],
-                                                [observed_mu[-1], observed_eta[-1], observed_theta[-1], 
-                                                observed_C[-1], observed_c[-1]])
-                        param_diffs_flattened = np.column_stack(param_diffs).ravel()
-                        difference_normalized = np.linalg.norm(param_diffs_flattened)
-                
-                        # update loss
-                        curr_loss = sess.run(
-                                            loss,
-                                            feed_dict={
-                                                        x_observed: train_x,
-                                                        y_truth: train_y
-                                                    }
-                                            )
-                        self.losses.append(curr_loss)
-                        loss_difference = np.abs(curr_loss - observed_loss[-1])
-
-                        # update gradient
-                        curr_grad = sess.run(
-                                            grad,
-                                            feed_dict={
-                                                        x_observed: train_x,
-                                                        y_truth: train_y
-                                                    }
-                                            )
-                        curr_grad_flattened = np.column_stack(curr_grad).ravel()
-                        grad_norm = np.linalg.norm(curr_grad_flattened)
-
-                        # save new values
-                        observed_eta.append(curr_eta)
-                        observed_mu.append(curr_mu)
-                        observed_theta.append(curr_theta)
-                        observed_C.append(curr_C)
-                        observed_c.append(curr_c)
-                        observed_loss.append(curr_loss)
-                        observed_grad.append(curr_grad)
-                        
-                        if iteration_counter % PRINT_ITERATION_CHECKPOINT_STEPS == 0:
-                            self.print_log(
-                                ' {} | {} | {} | {} | {} | {} | {}'
-                                .format(
-                                    iteration_counter,
-                                    curr_eta,
-                                    curr_mu,
-                                    curr_theta,
-                                    curr_C,
-                                    curr_c,
-                                    curr_loss
-                                    )
-                                )
-
-                        #check termination conditions
-                        if difference_normalized < TOL_PARAM:
-                            self.print_log('Parameter convergence in {} iterations!'.format(iteration_counter))
-                            break
-
-                        if loss_difference < TOL_LOSS:
-                            self.print_log('Loss function convergence in {} iterations!'.format(iteration_counter))
-                            break
-
-                        if grad_norm < TOL_GRAD:
-                            self.print_log('Gradient convergence in {} iterations!'.format(iteration_counter))
-                            break
-                        
-                        iteration_counter += 1
-                elif op == 'l-bfgs':                    
-                    optimizer.minimize(
-                                        session=sess,
-                                        feed_dict={
-                                            x_observed: train_x,
-                                            y_truth: train_y
-                                        }
-                    )
+                )
 
                 validation_loss = sess.run(
                                             loss,
@@ -517,11 +266,110 @@ class TensorHIP():
                                         ) 
                 validation_loss_sum += validation_loss / self.num_of_series
                 
-            self.print_log('Minimaztion Done in {} Seconds'.format(time.time() - start_time))
             params_vals = sess.run([eta, mu, theta, C, c])
             fitted_model_params = dict(zip(params_keys, params_vals)) 
             
         return validation_loss_sum, fitted_model_params
+
+    def _init_tf_model_variables(self, random_seed=RANDOM_SEED):
+        tf.set_random_seed(random_seed)
+        if 'mu' in self.model_params:
+            mu = tf.get_variable('mu', initializer=tf.constant(self.model_params['mu']))        
+        else:
+            mu = tf.get_variable(
+                name='mu',
+                shape=(1, self.num_of_exogenous_series),
+                initializer=tf.random_normal_initializer(mean=1, stddev=1, seed=random_seed)
+            )
+            
+        if 'eta' in self.model_params:
+            if self.fixed_eta is True:
+                eta = tf.constant(self.model_params['eta'])
+            else:
+                eta = tf.get_variable('eta', initializer=tf.constant(self.model_params['eta']))                                               
+        else:
+            eta = tf.get_variable(
+                name='eta',
+                shape=(),
+                initializer=tf.random_normal_initializer(mean=0, stddev=0.5),
+            )
+
+        if 'theta' in self.model_params:
+            if self.fixed_theta is True:
+                theta = tf.constant(self.model_params['theta'])
+            else:
+                theta = tf.get_variable('theta', initializer=tf.constant(self.model_params['theta']))  
+        else:
+            theta = tf.get_variable(
+                name='theta',
+                shape=(),
+                initializer=tf.random_normal_initializer(mean=10, stddev=5),
+                constraint=lambda x: tf.clip_by_value(x, 0.5, np.infty),
+            )  
+            
+        if 'C' in self.model_params:
+            if self.fixed_C is True:
+                C = tf.constant(self.model_params['C'])
+            else:
+                C = tf.get_variable('C', initializer=tf.constant(self.model_params['C']))
+        else:
+            C = tf.get_variable(
+                name='C',
+                shape=(),
+                initializer=tf.random_normal_initializer(mean=3, stddev=1),
+                constraint=lambda x: tf.clip_by_value(x, 0.01, np.infty),
+            )
+        
+        if 'c' in self.model_params:
+            if self.fixed_c is True:
+                c = tf.constant(self.model_params['c'])
+            else:
+                c = tf.get_variable('c', initializer=tf.constant(self.model_params['c']))
+        else:
+            c = tf.get_variable(
+                name='c',
+                shape=(),
+                initializer=tf.random_normal_initializer(mean=1, stddev=1),
+                constraint=lambda x: tf.clip_by_value(x, 0, np.infty),
+            )
+
+        return {
+            'eta': eta,
+            'mu': mu, 
+            'theta': theta, 
+            'C': C, 
+            'c': c,
+        }
+
+    def get_predictions(self):
+        # predict future values for the test data
+        # Instantiate a new model with the trained parameters
+        tf.reset_default_graph()
+        x_observed = tf.placeholder(tf.float32, name='x_observed')
+
+        self._init_tf_model_variables()
+        
+        pred = self.predict(x_observed)
+        predictions = []
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            for i in range(self.num_of_series):    
+                if self.scale_series is True:
+                    x = self.series_scaler.transform_x(self.x[i])
+                else:
+                    x = self.x[i]
+                new_predictions = sess.run(
+                                        pred, 
+                                        feed_dict={
+                                            x_observed: x
+                                        }
+                                    )
+                predictions.append(new_predictions)
+        if self.scale_series is True:
+            return self.series_scaler.invert_transform_ys(predictions)
+        else:
+            return predictions
     
     def get_model_parameters(self):
         """
