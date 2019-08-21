@@ -1,4 +1,3 @@
-ipdb==0.11
 jupyter==1.0.0
 Markdown==2.6.11
 numpy==1.14.5
