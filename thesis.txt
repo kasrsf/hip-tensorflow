@@ -1,0 +1,1 @@
+(Chapter 5) TensorFlow implementation for the linear hawkes intensity process (linear HIP) model used in the experiments for time series prediction
